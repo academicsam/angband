@@ -490,10 +490,12 @@ static bool store_sell(struct store_context *ctx)
 
 	if (store->sidx == STORE_HOME) {
 		prompt = "Drop which item? ";
-	} else {
-		tester = store_will_buy_tester;
-		get_mode |= SHOW_PRICES;
-	}
+    } else if (store->sidx == STORE_TROPHY) {
+            prompt = "Donate which item? ";
+        } else {
+            tester = store_will_buy_tester;
+            get_mode |= SHOW_PRICES;
+        }
 
 	/* Get an item */
 	player->upkeep->command_wrk = USE_INVEN;
@@ -522,6 +524,8 @@ static bool store_sell(struct store_context *ctx)
 	if (!store_check_num(store, temp_obj)) {
 		if (store->sidx == STORE_HOME)
 			msg("Your home is full.");
+        else if (store->sidx == STORE_TROPHY)
+            msg("Trophy shelves are all full.");
 		else
 			msg("I have not the room in my store to keep it.");
 
@@ -532,7 +536,7 @@ static bool store_sell(struct store_context *ctx)
 	object_desc(o_name, sizeof(o_name), temp_obj, ODESC_PREFIX | ODESC_FULL);
 
 	/* Real store */
-	if (store->sidx != STORE_HOME) {
+    if ((store->sidx != STORE_HOME) && (store->sidx != STORE_TROPHY)) {
 		/* Extract the value of the items */
 		u32b price = price_item(store, temp_obj, TRUE, amt);
 

@@ -147,7 +147,7 @@ static enum parser_error parse_store(struct parser *p) {
 	struct store *s;
 	unsigned int idx = parser_getuint(p, "index") - 1;
 
-	if (idx >= MAX_STORES)
+    if (idx >= MAX_STORES)
 		return PARSE_ERROR_OUT_OF_BOUNDS;
 
 	s = store_new(parser_getuint(p, "index") - 1);
@@ -511,9 +511,12 @@ static bool store_will_buy(struct store *store, const struct object *obj)
 	struct object_buy *buy;
 
 	/* Home accepts anything */
-	if (store->sidx == STORE_HOME) return TRUE;
+    if (store->sidx == STORE_HOME) return TRUE;
 
-	/* Ignore "worthless" items */
+    /* Trophy room also accepts anything */
+    if (store->sidx == STORE_TROPHY) return TRUE;
+
+    /* Ignore "worthless" items */
 	if (object_value(obj, 1, FALSE) <= 0) return FALSE;
 
 	/* No buy list means we buy anything */
@@ -723,7 +726,7 @@ static void mass_produce(struct object *obj)
  */
 void store_stock_list(struct store *store, struct object **list, int n)
 {
-	bool home = (store->sidx != STORE_HOME);
+    bool home = ((store->sidx != STORE_HOME) && (store->sidx != STORE_TROPHY));
 	int list_num;
 	int num = 0;
 
@@ -825,7 +828,7 @@ bool store_check_num(struct store *store, const struct object *obj)
 	if (store->stock_num < store->stock_size) return TRUE;
 
 	/* The "home" acts like the player */
-	if (store->sidx == STORE_HOME) {
+    if ((store->sidx == STORE_HOME) || (store->sidx == STORE_TROPHY)) {
 		for (stock_obj = store->stock; stock_obj; stock_obj = stock_obj->next) {
 			/* Can the new object be combined with the old one? */
 			if (object_similar(stock_obj, obj, OSTACK_PACK))
@@ -854,8 +857,8 @@ bool store_check_num(struct store *store, const struct object *obj)
 static void home_carry(struct object *obj)
 {
 	struct object *temp_obj;
-	struct store *store = &stores[STORE_HOME];
-
+    /* TODO: check if this is a valid store. */
+    struct store *store = store_at(cave, player->py, player->px);
 	/* Check each existing object (try to combine) */
 	for (temp_obj = store->stock; temp_obj; temp_obj = temp_obj->next) {
 		/* The home acts just like the player */
@@ -1229,7 +1232,7 @@ static struct object *store_create_item(struct store *store, object_kind *kind)
 static void store_maint(struct store *s)
 {
 	/* Ignore home */
-	if (s->sidx == STORE_HOME)
+    if ((s->sidx == STORE_HOME) || (s->sidx == STORE_TROPHY))
 		return;
 
 	/* Destroy crappy black market items */
@@ -1343,7 +1346,7 @@ void store_update(void)
 		for (n = 0; n < MAX_STORES; n++)
 		{
 			/* Skip the home */
-			if (n == STORE_HOME) continue;
+            if ((n == STORE_HOME) || (n == STORE_TROPHY)) continue;
 
 			/* Maintain */
 			store_maint(&stores[n]);
@@ -1359,7 +1362,7 @@ void store_update(void)
 			while (1)
 			{
 				n = randint0(MAX_STORES);
-				if (n != STORE_HOME) break;
+                if ((n != STORE_HOME) && (n != STORE_TROPHY )) break;
 			}
 
 			/* Shuffle it */
@@ -1708,7 +1711,7 @@ void do_cmd_retrieve(struct command *cmd)
 		return;
 	}
 
-	/* Get arguments */
+    /* Get arguments */
 	if (cmd_get_arg_item(cmd, "item", &obj) != CMD_OK)
 		return;
 
@@ -1903,8 +1906,8 @@ void do_cmd_stash(struct command *cmd)
 		return;
 
 	/* Check we are somewhere we can stash items. */
-	if (store->sidx != STORE_HOME) {
-		msg("You are not in your home.");
+    if ((store->sidx != STORE_HOME) && (store->sidx != STORE_TROPHY)) {
+        msg("You are not in your home or your trophy room.");
 		return;
 	}
 
@@ -1918,8 +1921,11 @@ void do_cmd_stash(struct command *cmd)
 	object_copy_amt(&dummy, obj, amt);
 
 	if (!store_check_num(store, &dummy)) {
-		msg("Your home is full.");
-		return;
+        if (store->sidx != STORE_HOME)
+            msg("Your home is full.");
+        else
+            msg("Trophy room is full.");
+        return;
 	}
 
 	/* Now get the real item */

@@ -185,24 +185,29 @@ priority:10
 flags:WALL | ROCK | GRANITE | NO_SCENT | NO_FLOW
 info:0:4
 
-name:22:permanent wall
+name:22:Trophy room
+graphics:9:T
+priority:20
+flags:SHOP | PROJECT | PASSABLE | PERMANENT | INTERESTING | EASY
+info:9:0
+
+name:23:permanent wall
 graphics:#:z
 priority:10
 flags:WALL | ROCK | PERMANENT | NO_SCENT | NO_FLOW
 
 ## holder for trap detected border floor tile
 
-name:23:dtrap edge - floor
+name:24:dtrap edge - floor
 graphics:.:G
 priority:5
 flags:LOS | PROJECT | PASSABLE | FLOOR | OBJECT | EASY | TRAP | RUNE | TORCH
 
 ## holder for trap detected border overlay tile
 
-name:24:dtrap edge - wall
+name:25:dtrap edge - wall
 graphics:#:G
 priority:10
 flags:WALL | ROCK | GRANITE | NO_SCENT | NO_FLOW
 info:0:4
-
 

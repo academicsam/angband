@@ -38,7 +38,8 @@ enum {
 	STORE_MAGIC	= 5,
 	STORE_B_MARKET	= 6,
 	STORE_HOME	= 7,
-	MAX_STORES	= 8
+    STORE_TROPHY	= 8,
+    MAX_STORES	= 9
 };
 
 struct object_buy {
