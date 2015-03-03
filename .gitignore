@@ -6,7 +6,7 @@ configure
 lib/apex/scores.*
 *.out
 *.exe
-lib/save/1000.*
+lib/save/*
 .project
 .cproject
 *.orig
@@ -23,3 +23,4 @@ doc/manual/*.aux
 mk/buildsys.mk
 *~
 .DS_Store
+Angband.*
