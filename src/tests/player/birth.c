@@ -18,15 +18,15 @@ int setup_tests(void **state) {
 }
 
 int teardown_tests(void *state) {
-	mem_free(z_info);
 	player_quests_free((struct player *)state);
+	mem_free(z_info);
 	mem_free(state);
 	return 0;
 }
 
 int test_generate0(void *state) {
 	struct player *p = state;
-	player_generate(p, &test_race, &test_class);
+	player_generate(p, &test_race, &test_class, FALSE);
 	eq(p->lev, 1);
 	ptreq(p->race, &test_race);
 	ptreq(p->class, &test_class);

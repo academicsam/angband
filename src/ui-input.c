@@ -24,6 +24,7 @@
 #include "init.h"
 #include "obj-gear.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-path.h"
 #include "randname.h"
 #include "target.h"
@@ -503,6 +504,7 @@ void bell_message(game_event_type unused, game_event_data *data, void *user)
 	Term_fresh();
 
 	display_message(unused, data, user);
+	player->upkeep->redraw |= PR_MESSAGE;
 }
 
 /**
@@ -985,7 +987,9 @@ static bool get_file_text(const char *suggested_name, char *path, size_t len)
 		return FALSE;
 
 	/* Tell the user where it's saved to. */
-	msg("Saving as %s.", path);
+	prt(format("Saving as %s.", path), 0, 0);
+	anykey();
+	prt("", 0, 0);
 
 	return TRUE;
 }
@@ -1060,7 +1064,7 @@ bool get_com_ex(const char *prompt, ui_event *command)
 void pause_line(struct term *term)
 {
 	prt("", term->hgt - 1, 0);
-	put_str("[Press any key to continue]", term->hgt - 1, 23);
+	put_str("[Press any key to continue]", term->hgt - 1, (Term->wid - 27) / 2);
 	(void)anykey();
 	prt("", term->hgt - 1, 0);
 }

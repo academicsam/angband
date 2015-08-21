@@ -35,12 +35,12 @@
 #include "obj-util.h"
 #include "object.h"
 #include "player-birth.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-quest.h"
 #include "player-spell.h"
 #include "player-timed.h"
 #include "player-util.h"
-#include "player.h"
 #include "savefile.h"
 #include "store.h"
 
@@ -213,13 +213,12 @@ static void get_stats(int stat_use[STAT_MAX])
 {
 	int i, j;
 
-	int dice[18];
-
+	int dice[3 * STAT_MAX];
 
 	/* Roll and verify some stats */
 	while (TRUE) {
 		/* Roll some dice */
-		for (j = i = 0; i < 18; i++) {
+		for (j = i = 0; i < 3 * STAT_MAX; i++) {
 			/* Roll the dice */
 			dice[i] = randint1(3 + i % 3);
 
@@ -228,7 +227,7 @@ static void get_stats(int stat_use[STAT_MAX])
 		}
 
 		/* Verify totals */
-		if ((j > 42) && (j < 54)) break;
+		if ((j > 7 * STAT_MAX) && (j < 9 * STAT_MAX)) break;
 	}
 
 	/* Roll the stats */
@@ -293,7 +292,7 @@ static void get_bonuses(void)
 	player->upkeep->update |= (PU_BONUS | PU_HP);
 
 	/* Update stuff */
-	update_stuff(player->upkeep);
+	update_stuff(player);
 
 	/* Fully healed */
 	player->chp = player->mhp;
@@ -369,34 +368,34 @@ void player_init(struct player *p)
 
 	/* Start with no artifacts made yet */
 	for (i = 0; z_info && i < z_info->a_max; i++) {
-		artifact_type *a_ptr = &a_info[i];
-		a_ptr->created = FALSE;
-		a_ptr->seen = FALSE;
+		struct artifact *art = &a_info[i];
+		art->created = FALSE;
+		art->seen = FALSE;
 	}
 
 	/* Start with no quests */
 	player_quests_reset(p);
 
 	for (i = 1; z_info && i < z_info->k_max; i++) {
-		object_kind *k_ptr = &k_info[i];
-		k_ptr->tried = FALSE;
-		k_ptr->aware = FALSE;
+		struct object_kind *kind = &k_info[i];
+		kind->tried = FALSE;
+		kind->aware = FALSE;
 	}
 
 	for (i = 1; z_info && i < z_info->r_max; i++) {
-		monster_race *r_ptr = &r_info[i];
-		monster_lore *l_ptr = &l_list[i];
-		r_ptr->cur_num = 0;
-		r_ptr->max_num = 100;
-		if (rf_has(r_ptr->flags, RF_UNIQUE))
-			r_ptr->max_num = 1;
-		l_ptr->pkills = 0;
+		struct monster_race *race = &r_info[i];
+		struct monster_lore *lore = &l_list[i];
+		race->cur_num = 0;
+		race->max_num = 100;
+		if (rf_has(race->flags, RF_UNIQUE))
+			race->max_num = 1;
+		lore->pkills = 0;
 	}
 
 	/* Always start with a well fed player (this is surely in the wrong fn) */
 	p->food = PY_FOOD_FULL - 1;
 
-	p->upkeep = mem_zalloc(sizeof(player_upkeep));
+	p->upkeep = mem_zalloc(sizeof(struct player_upkeep));
 	p->upkeep->inven = mem_zalloc((z_info->pack_size + 1) *
 								  sizeof(struct object *));
 	p->upkeep->quiver = mem_zalloc(z_info->quiver_size *
@@ -507,8 +506,9 @@ static void player_outfit(struct player *p)
 
 		object_flavor_aware(obj);
 		object_notice_everything(obj);
+		apply_autoinscription(obj);
 
-		inven_carry(p, obj, FALSE);
+		inven_carry(p, obj, TRUE, FALSE);
 		si->kind->everseen = TRUE;
 
 		/* Deduct the cost of the item from starting cash */
@@ -817,7 +817,7 @@ static void generate_stats(int stats[STAT_MAX], int points_spent[STAT_MAX],
  * and so is called whenever things like race or class are chosen.
  */
 void player_generate(struct player *p, const struct player_race *r,
-					 const struct player_class *c)
+					 const struct player_class *c, bool old_history)
 {
 	if (!c)
 		c = p->class;
@@ -845,7 +845,8 @@ void player_generate(struct player *p, const struct player_race *r,
 	/* Roll for age/height/weight */
 	get_ahw(p);
 
-	p->history = get_history(p->race->history);
+	if (!old_history)
+		p->history = get_history(p->race->history);
 }
 
 
@@ -859,7 +860,7 @@ static void do_birth_reset(bool use_quickstart, birther *quickstart_prev)
 	if (use_quickstart && quickstart_prev)
 		load_roller_data(quickstart_prev, NULL);
 
-	player_generate(player, NULL, NULL);
+	player_generate(player, NULL, NULL, use_quickstart && quickstart_prev);
 
 	player->depth = 0;
 
@@ -882,7 +883,7 @@ void do_cmd_birth_init(struct command *cmd)
 		save_roller_data(&quickstart_prev);
 		quickstart_allowed = TRUE;
 	} else {
-		player_generate(player, player_id2race(0), player_id2class(0));
+		player_generate(player, player_id2race(0), player_id2class(0), FALSE);
 		quickstart_allowed = FALSE;
 	}
 
@@ -913,7 +914,7 @@ void do_cmd_choose_race(struct command *cmd)
 {
 	int choice;
 	cmd_get_arg_choice(cmd, "choice", &choice);
-	player_generate(player, player_id2race(choice), NULL);
+	player_generate(player, player_id2race(choice), NULL, FALSE);
 
 	reset_stats(stats, points_spent, &points_left, FALSE);
 	generate_stats(stats, points_spent, &points_left);
@@ -924,7 +925,7 @@ void do_cmd_choose_class(struct command *cmd)
 {
 	int choice;
 	cmd_get_arg_choice(cmd, "choice", &choice);
-	player_generate(player, NULL, player_id2class(choice));
+	player_generate(player, NULL, player_id2class(choice), FALSE);
 
 	reset_stats(stats, points_spent, &points_left, FALSE);
 	generate_stats(stats, points_spent, &points_left);
@@ -1093,6 +1094,9 @@ void do_cmd_accept_character(struct command *cmd)
 	/* Character is now "complete" */
 	character_generated = TRUE;
 	player->upkeep->playing = TRUE;
+
+	/* Disable repeat command, so we don't try to be born again */
+	cmd_disable_repeat();
 
 	/* Now we're really done.. */
 	event_signal(EVENT_LEAVE_BIRTH);

@@ -16,7 +16,14 @@
 EXE = angband.exe
 all: ../$(EXE)
 
+ifneq (,$(findstring \SYSTEM32,$(PATH)))
+  dos = TRUE
+endif
 ifneq (,$(findstring \system32,$(PATH)))
+  dos = TRUE
+endif
+
+ifdef dos
   CP = copy
   RM = del
   BAR = "\"
@@ -55,7 +62,7 @@ endif
 CC = $(CROSS)gcc
 WRES = $(CROSS)windres
 WARNINGS = -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
-CFLAGS += $(WARNINGS) -std=c99 -Wdeclaration-after-statement -O2 -I.
+CFLAGS += $(WARNINGS) -std=c99 -DUSE_PRIVATE_PATHS -Wdeclaration-after-statement -O2 -I.
 
 ifdef BUILD_ID
   CFLAGS += -DBUILD_ID="$(BUILD_ID)"

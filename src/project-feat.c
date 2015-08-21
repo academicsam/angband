@@ -22,6 +22,7 @@
 #include "generate.h"
 #include "obj-pile.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "trap.h"
 
@@ -52,7 +53,7 @@ static void project_feature_handler_LIGHT_WEAK(project_feature_handler_context_t
 	sqinfo_on(cave->squares[y][x].info, SQUARE_GLOW);
 
 	/* Grid is in line of sight */
-	if (player_has_los_bold(y, x)) {
+	if (square_isview(cave, y, x)) {
 		if (!player->timed[TMD_BLIND]) {
 			/* Observe */
 			context->obvious = TRUE;
@@ -74,12 +75,12 @@ static void project_feature_handler_DARK_WEAK(project_feature_handler_context_t 
 		sqinfo_off(cave->squares[y][x].info, SQUARE_GLOW);
 
 		/* Hack -- Forget "boring" grids */
-		if (!square_isinteresting(cave, y, x))
+		if (square_isfloor(cave, y, x))
 			sqinfo_off(cave->squares[y][x].info, SQUARE_MARK);
 	}
 
 	/* Grid is in line of sight */
-	if (player_has_los_bold(y, x)) {
+	if (square_isview(cave, y, x)) {
 		/* Observe */
 		context->obvious = TRUE;
 
@@ -103,7 +104,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 	/* Granite */
 	if (square_iswall(cave, y, x) && !square_hasgoldvein(cave, y, x)) {
 		/* Message */
-		if (sqinfo_on(cave->squares[y][x].info, SQUARE_MARK)) {
+		if (sqinfo_has(cave->squares[y][x].info, SQUARE_MARK)) {
 			msg("The wall turns into mud!");
 			context->obvious = TRUE;
 		}
@@ -119,7 +120,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 	else if (square_iswall(cave, y, x) && square_hasgoldvein(cave, y, x))
 	{
 		/* Message */
-		if (sqinfo_on(cave->squares[y][x].info, SQUARE_MARK))
+		if (sqinfo_has(cave->squares[y][x].info, SQUARE_MARK))
 		{
 			msg("The vein turns into mud!");
 			msg("You have found something!");
@@ -140,7 +141,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 	else if (square_ismagma(cave, y, x) || square_isquartz(cave, y, x))
 	{
 		/* Message */
-		if (sqinfo_on(cave->squares[y][x].info, SQUARE_MARK))
+		if (sqinfo_has(cave->squares[y][x].info, SQUARE_MARK))
 		{
 			msg("The vein turns into mud!");
 			context->obvious = TRUE;
@@ -157,7 +158,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 	else if (square_isrubble(cave, y, x))
 	{
 		/* Message */
-		if (sqinfo_on(cave->squares[y][x].info, SQUARE_MARK))
+		if (sqinfo_has(cave->squares[y][x].info, SQUARE_MARK))
 		{
 			msg("The rubble turns into mud!");
 			context->obvious = TRUE;
@@ -171,7 +172,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 
 		/* Hack -- place an object */
 		if (randint0(100) < 10){
-			if (player_can_see_bold(y, x)) {
+			if (square_isseen(cave, y, x)) {
 				msg("There was something buried in the rubble!");
 				context->obvious = TRUE;
 			}
@@ -184,7 +185,7 @@ static void project_feature_handler_KILL_WALL(project_feature_handler_context_t 
 	else if (square_isdoor(cave, y, x))
 	{
 		/* Hack -- special message */
-		if (sqinfo_on(cave->squares[y][x].info, SQUARE_MARK))
+		if (sqinfo_has(cave->squares[y][x].info, SQUARE_MARK))
 		{
 			msg("The door turns into mud!");
 			context->obvious = TRUE;
@@ -214,7 +215,7 @@ static void project_feature_handler_KILL_DOOR(project_feature_handler_context_t 
 	if (square_isplayertrap(cave, y, x) || square_isdoor(cave, y, x))
 	{
 		/* Check line of sight */
-		if (player_has_los_bold(y, x))
+		if (square_isview(cave, y, x))
 		{
 			/* Message */
 			msg("There is a bright flash of light!");
@@ -251,7 +252,7 @@ static void project_feature_handler_KILL_TRAP(project_feature_handler_context_t 
 		place_closed_door(cave, y, x);
 
 		/* Check line of sight */
-		if (player_has_los_bold(y, x))
+		if (square_isview(cave, y, x))
 		{
 			context->obvious = TRUE;
 		}
@@ -261,7 +262,7 @@ static void project_feature_handler_KILL_TRAP(project_feature_handler_context_t 
 	if (square_istrap(cave, y, x))
 	{
 		/* Check line of sight */
-		if (player_has_los_bold(y, x))
+		if (square_isview(cave, y, x))
 		{
 			msg("There is a bright flash of light!");
 			context->obvious = TRUE;
@@ -281,7 +282,7 @@ static void project_feature_handler_KILL_TRAP(project_feature_handler_context_t 
 		square_unlock_door(cave, y, x);
 
 		/* Check line of sound */
-		if (player_has_los_bold(y, x))
+		if (square_isview(cave, y, x))
 		{
 			msg("Click!");
 			context->obvious = TRUE;
@@ -309,7 +310,7 @@ static void project_feature_handler_MAKE_DOOR(project_feature_handler_context_t 
 	square_add_door(cave, y, x, TRUE);
 
 	/* Observe */
-	if (sqinfo_on(cave->squares[y][x].info, SQUARE_MARK))
+	if (sqinfo_has(cave->squares[y][x].info, SQUARE_MARK))
 		context->obvious = TRUE;
 
 	/* Update the visuals */
@@ -327,7 +328,8 @@ static void project_feature_handler_MAKE_TRAP(project_feature_handler_context_t 
 	if (square_iswarded(cave, y, x)) return;
 
 	/* Create a trap */
-	place_trap(cave, y, x, -1, cave->depth);
+	square_add_trap(cave, y, x);
+	context->obvious = TRUE;
 }
 
 static void project_feature_handler_ACID(project_feature_handler_context_t *context)
@@ -438,10 +440,10 @@ static const project_feature_handler_f feature_handlers[] = {
 	#define ELEM(a, b, c, d, e, f, g, h, i, col) project_feature_handler_##a,
 	#include "list-elements.h"
 	#undef ELEM
-	#define PROJ_ENV(a, col) project_feature_handler_##a,
+	#define PROJ_ENV(a, col, desc) project_feature_handler_##a,
 	#include "list-project-environs.h"
 	#undef PROJ_ENV
-	#define PROJ_MON(a, obv) NULL, 
+	#define PROJ_MON(a, obv, desc) NULL, 
 	#include "list-project-monsters.h"
 	#undef PROJ_MON
 	NULL

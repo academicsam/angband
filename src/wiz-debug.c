@@ -37,6 +37,7 @@
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "object.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "player-util.h"
 #include "project.h"
@@ -487,7 +488,7 @@ static void get_art_name(char *buf, int max, int a_idx)
 	/* Create the artifact description */
 	object_desc(buf, max, obj, ODESC_SINGULAR | ODESC_SPOIL);
 
-	object_delete(obj);
+	object_delete(&obj);
 }
 
 /**
@@ -551,8 +552,7 @@ static bool wiz_create_item_subaction(struct menu *m, const ui_event *e, int oid
 
 		/* Create the item */
 		if (tval_is_money_k(kind))
-			obj = make_gold(player->depth,
-							lookup_kind(TV_GOLD, kind->sval)->name);
+			obj = make_gold(player->depth, kind->name);
 		else {
 			/* Get object */
 			obj = object_new();
@@ -709,7 +709,7 @@ static void wiz_create_item(bool art)
 	
 	/* Redraw map */
 	player->upkeep->redraw |= (PR_MAP | PR_ITEMLIST);
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 }
 
@@ -997,7 +997,7 @@ static void wiz_statistics(struct object *obj, int level)
 				other++;
 
 			/* Nuke the test object */
-			object_delete(test_obj);
+			object_delete(&test_obj);
 		}
 
 		/* Final dump */
@@ -1294,6 +1294,9 @@ static void do_cmd_wiz_jump(void)
 
 	/* New depth */
 	dungeon_change_level(depth);
+
+	/* Hack - should be handled by redoing how debug commands work - NRM */
+	cmdq_push(CMD_HOLD);
 }
 
 
@@ -1357,7 +1360,7 @@ static void do_cmd_rerate(void)
 	player->upkeep->redraw |= (PR_HP);
 
 	/* Handle stuff */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Message */
 	msg("Current Life Rating is %d/100.", percent);
@@ -1630,12 +1633,12 @@ static void wiz_test_kind(int tval)
 
 	for (sval = 0; sval < 255; sval++) {
 		/* This spams failure messages, but that's the downside of wizardry */
-		object_kind *kind = lookup_kind(tval, sval);
+		struct object_kind *kind = lookup_kind(tval, sval);
 		if (!kind) continue;
 
 		/* Create the item */
 		if (tval == TV_GOLD)
-			obj = make_gold(player->depth, lookup_kind(TV_GOLD, sval)->name);
+			obj = make_gold(player->depth, kind->name);
 		else {
 			obj = object_new();
 			object_prep(obj, kind, player->depth, RANDOMISE);
@@ -1696,7 +1699,7 @@ static void do_cmd_wiz_advance(void)
 	/* Artifacts: 3, 5, 12, ...*/
 	
 	/* Update stuff */
-	player->upkeep->update |= (PU_BONUS | PU_HP | PU_MANA | PU_SPELLS);
+	player->upkeep->update |= (PU_BONUS | PU_HP | PU_SPELLS);
 
 	/* Redraw everything */
 	player->upkeep->redraw |= (PR_BASIC | PR_EXTRA | PR_MAP | PR_INVEN |
@@ -1704,7 +1707,7 @@ static void do_cmd_wiz_advance(void)
 			PR_ITEMLIST);
 
 	/* Hack -- update */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 }
 
@@ -1748,7 +1751,7 @@ void do_cmd_wiz_effect(void)
 	/* Get the name */
 	if (askfor_aux(name, sizeof(name), NULL)) {
 		/* See if an effect parameter was entered */
-		p1 = effect_param(name);
+		p1 = effect_param(index, name);
 		if (p1 == -1) p1 = 0;
 	}
 
@@ -2209,6 +2212,14 @@ void get_debug_command(void)
 			screen_load();
 			if (n < 1) n = 1;
 			player_exp_gain(player, n);
+			break;
+		}
+
+		/* Quit the game, don't save */
+		case 'X':
+		{
+			if (get_check("Really quit without saving? "))
+				quit("user choice");
 			break;
 		}
 

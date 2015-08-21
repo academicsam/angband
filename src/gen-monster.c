@@ -44,9 +44,9 @@ static char base_d_char[15];
  * \param name the pit profile name
  * \return the pit profile
  */
-pit_profile *lookup_pit_profile(const char *name)
+struct pit_profile *lookup_pit_profile(const char *name)
 {
-	pit_profile *profile;
+	struct pit_profile *profile;
 
 	/* Look for it */
 	for (profile = &pit_info[z_info->pit_max - 1]; profile; profile = profile->next) {
@@ -67,7 +67,7 @@ pit_profile *lookup_pit_profile(const char *name)
  *
  * This is a hook called as an argument to get_mon_num_prep()
  */
-static bool mon_select(monster_race *race)
+static bool mon_select(struct monster_race *race)
 {
     /* Require that the monster symbol be correct. */
     if (base_d_char[0] != '\0') {
@@ -163,7 +163,7 @@ bool mon_restrict(const char *monster_type, int depth, bool unique_ok)
 			return FALSE;
     } else {
 		/* Use a pit profile */
-		pit_profile *profile = lookup_pit_profile(monster_type);
+		struct pit_profile *profile = lookup_pit_profile(monster_type);
 
 		/* Accept the profile or leave area empty if none found */
 		if (profile)
@@ -268,7 +268,8 @@ void spread_monsters(struct chunk *c, const char *type, int depth, int num,
  * \param x1
  * \param x2 the limits of the vault
  */
-void get_vault_monsters(struct chunk *c, char racial_symbol[], byte vault_type, const char *data, int y1, int y2, int x1, int x2)
+void get_vault_monsters(struct chunk *c, char racial_symbol[], char *vault_type,
+						const char *data, int y1, int y2, int x1, int x2)
 {
     int i, y, x, depth;
     const char *t;
@@ -280,11 +281,11 @@ void get_vault_monsters(struct chunk *c, char racial_symbol[], byte vault_type, 
 				  sizeof(racial_symbol[i]));
 
 		/* Determine level of monster */
-		if (vault_type == 6)
+		if (strstr(vault_type, "Lesser vault"))
 			depth = player->depth + 2;
-		else if (vault_type == 7)
+		else if (strstr(vault_type, "Medium vault"))
 			depth = player->depth + 4;
-		else if (vault_type == 8)
+		else if (strstr(vault_type, "Greater vault"))
 			depth = player->depth + 6;
 		else
 			depth = player->depth;

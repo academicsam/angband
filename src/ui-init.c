@@ -18,8 +18,8 @@
  * This file is used to initialize various variables and arrays for the
  * Angband game.
  *
- * Several of the arrays for Angband are built from "template" files in
- * the "lib/edit" directory.
+ * Several of the arrays for Angband are built from data files in the
+ * "lib/gamedata" directory.
  */
 
 
@@ -31,6 +31,7 @@
 #include "ui-input.h"
 #include "ui-keymap.h"
 #include "ui-knowledge.h"
+#include "ui-options.h"
 #include "ui-output.h"
 #include "ui-prefs.h"
 #include "ui-term.h"
@@ -99,6 +100,9 @@ void textui_init(void)
  */
 void textui_cleanup(void)
 {
+	/* Cleanup any options menus */
+	cleanup_options();
+
 	keymap_free();
 	textui_prefs_free();
 }

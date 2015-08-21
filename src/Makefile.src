@@ -6,8 +6,8 @@
 #
 
 NAME = Angband
-VERSION = TNG
-COPYRIGHT = (c) 1995-2014 Angband contributors
+VERSION = 4.0.1
+COPYRIGHT = (c) 1995-2015 Angband contributors
 PROGNAME = angband
 
 HEADERS = \

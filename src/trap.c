@@ -171,13 +171,13 @@ bool square_player_trap_allowed(struct chunk *c, int y, int x)
 static int pick_trap(int feat, int trap_level)
 {
     int trap_index = 0;
-    feature_type *f_ptr = &f_info[feat];
+    struct feature *f = &f_info[feat];
 	
     struct trap_kind *kind;
     bool trap_is_okay = FALSE;
 	
     /* Paranoia */
-    if (!tf_has(f_ptr->flags, TF_TRAP))
+    if (!tf_has(f->flags, TF_TRAP))
 		return -1;
 	
     /* Try to create a trap appropriate to the level.  Make certain that at
@@ -200,7 +200,7 @@ static int pick_trap(int feat, int trap_level)
 		trap_is_okay = TRUE;
 
 		/* Floor? */
-		if (tf_has(f_ptr->flags, TF_FLOOR) && !trf_has(kind->flags, TRF_FLOOR))
+		if (tf_has(f->flags, TF_FLOOR) && !trf_has(kind->flags, TRF_FLOOR))
 			trap_is_okay = FALSE;
 
 		/* Check legality of trapdoors. */
@@ -417,13 +417,19 @@ extern void hit_trap(int y, int x)
 static void remove_trap_aux(struct chunk *c, struct trap *trap, int y, int x,
 							bool domsg)
 {
-    /* We are deleting a rune */
-    if (trf_has(trap->flags, TRF_RUNE)) {
-		if (domsg)
-			msg("You have removed the %s.", trap->kind->name);
-    } else if (domsg)
-		/* We are disarming a trap */
-		msgt(MSG_DISARM, "You have disarmed the %s.", trap->kind->name);
+	/* Message if needed */
+	if (domsg) {
+		/* We are deleting a rune */
+		if (trf_has(trap->flags, TRF_RUNE)) {
+			if (c->mon_current < 0) {
+				/* Removed by player */
+				msg("You have removed the %s.", trap->kind->name);
+			}
+		} else {
+			/* We are disarming a trap */
+			msgt(MSG_DISARM, "You have disarmed the %s.", trap->kind->name);
+		}
+	}
 
     /* Wipe the trap */
 	mem_free(trap);
@@ -463,7 +469,7 @@ bool square_remove_trap(struct chunk *c, int y, int x, bool domsg, int t_idx)
     }
 
     /* Refresh grids that the character can see */
-    if (player_can_see_bold(y, x))
+    if (square_isseen(c, y, x))
 		square_light_spot(c, y, x);
     
     /* Verify traps (remove marker if appropriate) */

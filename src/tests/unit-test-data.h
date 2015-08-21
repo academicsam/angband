@@ -645,6 +645,23 @@ static struct start_item TEST_DATA start_longsword = {
 	.next = &start_torch,
 };
 
+static struct class_book TEST_DATA test_book = {
+	.tval = 10,
+	.sval = 4,
+	.realm = 1,
+	.num_spells = 8,
+	.spells = NULL,
+};
+
+static struct magic_realm TEST_DATA test_realm = {
+	.index = 1,
+	.stat = 1,
+	.verb = "spell_verb",
+	.spell_noun = "spell_noun",
+	.book_noun = "book_noun",
+	.adjective = "realm_adjective",
+};
+
 static struct player_class TEST_DATA test_class = {
 	.name = "TestClass",
 	.title = {
@@ -705,6 +722,14 @@ static struct player_class TEST_DATA test_class = {
 	.sense_div = 40,
 
 	.start_items = &start_longsword,
+	.magic =  {
+		.spell_first = 1,
+		.spell_weight = 300,
+		.spell_realm = &test_realm,
+		.num_books = 1,
+		.books = &test_book,
+		.total_spells = 8,
+	},
 };
 
 static struct monster_base TEST_DATA test_rb_info = {
@@ -961,4 +986,30 @@ static struct player TEST_DATA test_player = {
 	.upkeep = &test_player_upkeep,
 };
 
+static struct chunk TEST_DATA test_cave = {
+	.name = "Test",
+	.created_at = 1,
+	.depth = 1,
+
+	.feeling = 0,
+	.obj_rating = 0,
+	.mon_rating = 0,
+	.good_item = FALSE,
+
+	.height = 2,
+	.width = 2,
+
+	.feeling_squares = 0,
+	.feat_count = NULL,
+
+	.feat = NULL,
+	.m_idx = NULL,
+
+	.squares = NULL,
+
+	.monsters = NULL,
+	.mon_max = 1,
+	.mon_cnt = 0,
+	.mon_current = -1,
+};
 #endif /* !UNIT_TEST_DATA */

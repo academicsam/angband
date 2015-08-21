@@ -959,15 +959,13 @@ static int compare_advances(const void *ap, const void *bp)
  */
 + (NSString *)angbandDocumentsPath
 {
-    /* Angband requires the trailing slash, so we'll just add it here; NSString
-	 * won't care about it when we use the base path for other things */
     NSString *documents = [NSSearchPathForDirectoriesInDomains( NSDocumentDirectory, NSUserDomainMask, YES ) lastObject];
 
 #if defined(SAFE_DIRECTORY)
     NSString *versionedDirectory = [NSString stringWithFormat: @"%@-%s", AngbandDirectoryNameBase, VERSION_STRING];
-    return [[documents stringByAppendingPathComponent: versionedDirectory] stringByAppendingString: @"/"];
+    return [documents stringByAppendingPathComponent: versionedDirectory];
 #else
-    return [[documents stringByAppendingPathComponent: AngbandDirectoryNameBase] stringByAppendingString: @"/"];
+    return [documents stringByAppendingPathComponent: AngbandDirectoryNameBase];
 #endif
 }
 
@@ -1100,7 +1098,8 @@ static size_t Term_mbcs_cocoa(wchar_t *dest, const char *src, int n)
     Term_flush();
 
     /* Prompt the user */
-    prt("[Choose 'New' or 'Open' from the 'File' menu]", 23, 17);
+    prt("[Choose 'New' or 'Open' from the 'File' menu]",
+		(Term->hgt - 23) / 5 + 23, (Term->wid - 45) / 2);
     Term_fresh();
 
     /*
@@ -1372,6 +1371,7 @@ static NSMenuItem *superitem(NSMenuItem *self)
     CGFloat newRows = floor( (contentRect.size.height - (borderSize.height * 2.0)) / tileSize.height );
     CGFloat newColumns = ceil( (contentRect.size.width - (borderSize.width * 2.0)) / tileSize.width );
 
+    if (newRows < 1 || newColumns < 1) return;
     self->cols = newColumns;
     self->rows = newRows;
     [self resizeOverdrawCache];
@@ -1394,6 +1394,7 @@ static NSMenuItem *superitem(NSMenuItem *self)
             [mutableTerminals release];
             [mutableTerm release];
         }
+        [[NSUserDefaults standardUserDefaults] synchronize];
     }
 
     term *old = Term;
@@ -1698,8 +1699,11 @@ static void Term_init_cocoa(term *t)
     if( termIdx < (int)[terminalDefaults count] )
     {
         NSDictionary *term = [terminalDefaults objectAtIndex: termIdx];
-        rows = [[term valueForKey: AngbandTerminalRowsDefaultsKey] integerValue];
-        columns = [[term valueForKey: AngbandTerminalColumnsDefaultsKey] integerValue];
+        NSInteger defaultRows = [[term valueForKey: AngbandTerminalRowsDefaultsKey] integerValue];
+        NSInteger defaultColumns = [[term valueForKey: AngbandTerminalColumnsDefaultsKey] integerValue];
+
+        if (defaultRows > 0) rows = defaultRows;
+        if (defaultColumns > 0) columns = defaultColumns;
     }
 
     context->cols = columns;
@@ -1713,10 +1717,21 @@ static void Term_init_cocoa(term *t)
     if (termIdx == 0)
     {
         [window setTitle:@"Angband"];
+
+        /* Set minimum size (80x24) */
+        NSSize minsize;
+        minsize.width = 80 * context->tileSize.width + context->borderSize.width * 2.0;
+        minsize.height = 24 * context->tileSize.height + context->borderSize.height * 2.0;
+        [window setContentMinSize:minsize];
     }
     else
     {
         [window setTitle:[NSString stringWithFormat:@"Term %d", termIdx]];
+        /* Set minimum size (1x1) */
+        NSSize minsize;
+        minsize.width = context->tileSize.width + context->borderSize.width * 2.0;
+        minsize.height = context->tileSize.height + context->borderSize.height * 2.0;
+        [window setContentMinSize:minsize];
     }
     
     
@@ -1856,15 +1871,11 @@ static void Term_nuke_cocoa(term *t)
  * Returns the CGImageRef corresponding to an image with the given name in the
  * resource directory, transferring ownership to the caller
  */
-static CGImageRef create_angband_image(NSString *name)
+static CGImageRef create_angband_image(NSString *path)
 {
     CGImageRef decodedImage = NULL, result = NULL;
     
-    /* Get the path to the image */
-    NSBundle *bundle = [NSBundle bundleForClass:[AngbandView class]];
-    NSString *path = [bundle pathForImageResource:name];
-    
-    /* Try using ImageIO to load it */
+    /* Try using ImageIO to load the image */
     if (path)
     {
         NSURL *url = [[NSURL alloc] initFileURLWithPath:path isDirectory:NO];
@@ -1951,9 +1962,8 @@ static errr Term_xtra_cocoa_react(void)
         /* Try creating the image if we want one */
         if (new_mode != NULL)
         {
-            NSString *img_name = [NSString stringWithCString:new_mode->file 
-                                                encoding:NSMacOSRomanStringEncoding];
-            pict_image = create_angband_image(img_name);
+            NSString *img_path = [NSString stringWithFormat:@"%s/%s", new_mode->path, new_mode->file];
+            pict_image = create_angband_image(img_path);
 
             /* If we failed to create the image, set the new desired mode to
 			 * NULL */
@@ -2615,12 +2625,8 @@ static void load_sounds(void)
 	char buffer[2048];
 	ang_file *fff;
     
-	/* Build the "sound" path */
-	path_build(path, sizeof(path), ANGBAND_DIR_XTRA, "sound");
-	ANGBAND_DIR_XTRA_SOUND = string_make(path);
-    
 	/* Find and open the config file */
-	path_build(path, sizeof(path), ANGBAND_DIR_XTRA_SOUND, "sound.cfg");
+	path_build(path, sizeof(path), ANGBAND_DIR_SOUNDS, "sound.cfg");
 	fff = file_open(path, MODE_READ, -1);
     
 	/* Handle errors */
@@ -2704,7 +2710,7 @@ static void load_sounds(void)
             if (! sound)
             {
                 /* We have to load the sound. Build the path to the sample */
-                path_build(path, sizeof(path), ANGBAND_DIR_XTRA_SOUND, cur_token);
+                path_build(path, sizeof(path), ANGBAND_DIR_SOUNDS, cur_token);
                 if (file_exists(path))
                 {
                     
@@ -2813,16 +2819,6 @@ static void init_windows(void)
     Term_activate(primary);
 }
 
-
-
-/**
- * Return the directory into which we put data (save and config)
- */
-static NSString *get_data_directory(void)
-{
-    return [@"~/Documents/Angband/" stringByExpandingTildeInPath];
-}
-
 /**
  * Handle the "open_when_ready" flag
  */
@@ -2861,6 +2857,7 @@ static void quit_calmly(void)
         /* Save the game */
         save_game();
         record_current_savefile();
+		close_game();
         
         
         /* Quit */
@@ -3302,10 +3299,9 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     NSAutoreleasePool* pool = [[NSAutoreleasePool alloc] init];
     BOOL selectedSomething = NO;
     int panelResult;
-    NSString* startingDirectory;
     
     /* Get where we think the save files are */
-    startingDirectory = [get_data_directory() stringByAppendingPathComponent:@"/save/"];
+    NSURL *startingDirectoryURL = [NSURL fileURLWithPath:[NSString stringWithCString:ANGBAND_DIR_SAVE encoding:NSASCIIStringEncoding] isDirectory:YES];
     
     /* Get what we think the default save file name is.
 	 * Default to the empty string. */
@@ -3317,9 +3313,9 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
     [panel setCanChooseFiles:YES];
     [panel setCanChooseDirectories:NO];
     [panel setResolvesAliases:YES];
-    [panel setAllowsMultipleSelection:YES];
+    [panel setAllowsMultipleSelection:NO];
     [panel setTreatsFilePackagesAsDirectories:YES];
-	[panel setDirectoryURL:[NSURL URLWithString:startingDirectory]];
+    [panel setDirectoryURL:startingDirectoryURL];
     
     /* Run it */
     panelResult = [panel runModal];
@@ -3328,7 +3324,13 @@ static bool cocoa_get_file(const char *suggested_name, char *path, size_t len)
         NSArray* fileURLs = [panel URLs];
         if ([fileURLs count] > 0)
         {
-            selectedSomething = [(NSURL *)[fileURLs objectAtIndex:0] getFileSystemRepresentation:savefile maxLength:sizeof savefile];
+            NSURL* savefileURL = (NSURL *)[fileURLs objectAtIndex:0];
+            /* The path property doesn't do the right thing except for
+             * URLs with the file scheme. We had getFileSystemRepresentation
+             * here before, but that wasn't introduced until OS X 10.9. */
+            assert([[savefileURL scheme] isEqualToString:@"file"]);
+            selectedSomething = [[savefileURL path] getCString:savefile 
+                maxLength:sizeof savefile encoding:NSMacOSRomanStringEncoding];
         }
     }
     

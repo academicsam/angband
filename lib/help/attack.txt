@@ -352,7 +352,7 @@ A note on speed
 ===============
 
 Monsters which do not move at normal speed generally move "slowly" (-10 to
-peed), "fast" (+10), "very fast" (+20) or "incredibly fast" (+30). (It will
+speed), "fast" (+10), "very fast" (+20) or "incredibly fast" (+30). (It will
 surprise nobody that Morgoth is one of the few monsters in the last
 category.) This is further adjusted by the fact that any non-unique monster
 may have a random adjustment from (-2) to (+2) to its own speed.
@@ -542,9 +542,8 @@ Ego Helms:
 ----------
 Stat Boosting Helms
   There are magical helms found in the dungeon that have the ability to
-  boost the wearer's intelligence, wisdom, or charisma. Helms of Beauty are
-  the ones that boost charisma. In addition to boosting the relevant stat
-  these helms will also prevent that stat from being drained.
+  boost the wearer's intelligence or wisdom. In addition to boosting the
+  relevant stat these helms will also prevent that stat from being drained.
 
 Crown of the Magi
   This is the great crown of the wizards. The wearer will have an increased
@@ -559,7 +558,7 @@ Crown of Might
 
 Crown of Lordliness
   This is the great crown of the priests. The wearer will have an increased
-  and sustained wisdom and charisma.
+  and sustained wisdom.
 
 Helm/Crown of Seeing
   This is the great helmet or crown of the rogues. The wearer will be able

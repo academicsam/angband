@@ -28,6 +28,7 @@
 #include "obj-pile.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-util.h"
 
 static const struct slot_info {
@@ -85,7 +86,10 @@ int slot_by_type(struct player *p, int type, bool full)
 
 bool slot_type_is(int slot, int type)
 {
-	return player->body.slots[slot].type == type ? TRUE : FALSE;
+	/* Assume default body if no player */
+	struct player_body body = player ? player->body : bodies[0];
+
+	return body.slots[slot].type == type ? TRUE : FALSE;
 }
 
 struct object *slot_object(struct player *p, int slot)
@@ -107,14 +111,19 @@ struct object *equipped_item_by_slot_name(struct player *p, const char *name)
 	return slot_object(p, slot_by_name(p, name));
 }
 
-bool object_is_equipped(struct player_body body, const struct object *obj)
+int object_slot(struct player_body body, const struct object *obj)
 {
 	int i;
 
 	for (i = 0; i < body.count; i++)
 		if (obj == body.slots[i].obj) break;
 
-	return (i < body.count) ? TRUE : FALSE;
+	return i;
+}
+
+bool object_is_equipped(struct player_body body, const struct object *obj)
+{
+	return (object_slot(body, obj) < body.count);
 }
 
 bool object_is_carried(struct player *p, const struct object *obj)
@@ -202,10 +211,10 @@ const char *equip_describe(struct player *p, int slot)
  * For items where multiple slots could work (e.g. rings), the function
  * will try to return an open slot if possible.
  */
-int wield_slot(const struct object *o_ptr)
+int wield_slot(const struct object *obj)
 {
 	/* Slot for equipment */
-	switch (o_ptr->tval)
+	switch (obj->tval)
 	{
 		case TV_BOW: return slot_by_type(player, EQUIP_BOW, FALSE);
 		case TV_AMULET: return slot_by_type(player, EQUIP_AMULET, FALSE);
@@ -215,15 +224,15 @@ int wield_slot(const struct object *o_ptr)
 		case TV_BOOTS: return slot_by_type(player, EQUIP_BOOTS, FALSE);
 	}
 
-	if (tval_is_melee_weapon(o_ptr))
+	if (tval_is_melee_weapon(obj))
 		return slot_by_type(player, EQUIP_WEAPON, FALSE);
-	else if (tval_is_ring(o_ptr))
+	else if (tval_is_ring(obj))
 		return slot_by_type(player, EQUIP_RING, FALSE);
-	else if (tval_is_light(o_ptr))
+	else if (tval_is_light(obj))
 		return slot_by_type(player, EQUIP_LIGHT, FALSE);
-	else if (tval_is_body_armor(o_ptr))
+	else if (tval_is_body_armor(obj))
 		return slot_by_type(player, EQUIP_BODY_ARMOR, FALSE);
-	else if (tval_is_head_armor(o_ptr))
+	else if (tval_is_head_armor(obj))
 		return slot_by_type(player, EQUIP_HAT, FALSE);
 
 	/* No slot available */
@@ -240,7 +249,7 @@ int wield_slot(const struct object *o_ptr)
 int minus_ac(struct player *p)
 {
 	int i, count = 0;
-	object_type *obj = NULL;
+	struct object *obj = NULL;
 
 	char o_name[80];
 
@@ -316,7 +325,7 @@ char gear_to_label(struct object *obj)
 
 	/* Check the quiver */
 	for (i = 0; i < z_info->quiver_size; i++)
-		if (player->upkeep->quiver[i] == obj) return I2A(i);
+		if (player->upkeep->quiver[i] == obj) return I2D(i);
 
 	/* Check the inventory */
 	for (i = 0; i < z_info->pack_size; i++)
@@ -336,14 +345,20 @@ bool gear_excise_object(struct object *obj)
 
 	pile_excise(&player->gear, obj);
 
+	/* Change the weight */
+	player->upkeep->total_weight -= (obj->number * obj->weight);
+
 	/* Make sure it isn't still equipped */
 	for (i = 0; i < player->body.count; i++) {
 		if (slot_object(player, i) == obj)
 			player->body.slots[i].obj = NULL;
 	}
 
+	/* Update the gear */
+	calc_inventory(player->upkeep, player->gear, player->body);
+
 	/* Housekeeping */
-	player->upkeep->update |= (PU_BONUS | PU_MANA | PU_INVEN);
+	player->upkeep->update |= (PU_BONUS);
 	player->upkeep->notice |= (PN_COMBINE);
 	player->upkeep->redraw |= (PR_INVEN | PR_EQUIP);
 
@@ -366,7 +381,8 @@ void gear_insert_end(struct object *obj)
  *
  * Optionally describe what remains.
  */
-struct object *gear_object_for_use(struct object *obj, int num, bool message)
+struct object *gear_object_for_use(struct object *obj, int num, bool message,
+								   bool *none_left)
 {
 	struct object *usable;
 	char name[80];
@@ -393,10 +409,14 @@ struct object *gear_object_for_use(struct object *obj, int num, bool message)
 	/* Split off a usable object if necessary */
 	if (obj->number > num) {
 		usable = object_split(obj, num);
+
+		/* Change the weight */
+		player->upkeep->total_weight -= (num * obj->weight);
 	} else {
 		/* We're using the entire stack */
 		usable = obj;
 		gear_excise_object(usable);
+		*none_left = TRUE;
 
 		/* Stop tracking item */
 		if (tracked_object_is(player->upkeep, obj))
@@ -406,11 +426,8 @@ struct object *gear_object_for_use(struct object *obj, int num, bool message)
 		cmd_disable_repeat();
 	}
 
-	/* Change the weight */
-	player->upkeep->total_weight -= (num * obj->weight);
-
 	/* Housekeeping */
-	player->upkeep->update |= (PU_BONUS | PU_MANA | PU_INVEN | PU_TORCH);
+	player->upkeep->update |= (PU_BONUS);
 	player->upkeep->notice |= (PN_COMBINE);
 	player->upkeep->redraw |= (PR_INVEN | PR_EQUIP);
 
@@ -426,15 +443,66 @@ struct object *gear_object_for_use(struct object *obj, int num, bool message)
 }
 
 /**
+ * Check if we have space to put an item in a new quiver slot without 
+ * increasing the number of pack slots used 
+ */
+static bool new_quiver_slot_okay(const struct object *obj)
+{
+	int i, quiver_count = 0;
+	bool empty_slot = FALSE;
+
+	/* Must be ammo */
+	if (!tval_is_ammo(obj)) return FALSE;
+
+	/* Count the current space */
+	for (i = 0; i < z_info->quiver_size; i++) {
+		struct object *quiver_obj = player->upkeep->quiver[i];
+		if (quiver_obj)
+			quiver_count += quiver_obj->number;
+		else
+			empty_slot = TRUE;
+	}
+
+	/* Check for free quiver slots */
+	if (!empty_slot) return FALSE;
+
+	/* Check we won't need another pack slot */
+	quiver_count += z_info->stack_size;
+	while (quiver_count > z_info->stack_size)
+		quiver_count -= z_info->stack_size;
+	if (quiver_count + obj->number > z_info->stack_size) return FALSE;
+
+	/* Good to go */
+	return TRUE;
+}
+
+/**
+ * Check if an object is in the quiver
+ */
+static bool object_is_in_quiver(const struct object *obj)
+{
+	int i;
+
+	for (i = 0; i < z_info->quiver_size; i++)
+		if (obj == player->upkeep->quiver[i])
+			return TRUE;
+
+	return FALSE;
+}
+
+/**
  * Check if we have space for an item in the pack without overflow
  */
-bool inven_carry_okay(const object_type *obj)
+bool inven_carry_okay(const struct object *obj)
 {
 	/* Empty slot? */
 	if (pack_slots_used(player) < z_info->pack_size) return TRUE;
 
 	/* Check if it can stack */
 	if (inven_stack_okay(obj)) return TRUE;
+
+	/* Check if we can add a quiver slot */
+	if (new_quiver_slot_okay(obj)) return TRUE;
 
 	/* Nope */
 	return FALSE;
@@ -443,7 +511,7 @@ bool inven_carry_okay(const object_type *obj)
 /**
  * Check to see if an item is stackable in the inventory
  */
-bool inven_stack_okay(const object_type *o_ptr)
+bool inven_stack_okay(const struct object *obj)
 {
 	struct object *gear_obj;
 	int new_number;
@@ -458,7 +526,7 @@ bool inven_stack_okay(const object_type *o_ptr)
 			continue;
 
 		/* Check if the two items can be combined */
-		if (object_similar(gear_obj, o_ptr, OSTACK_PACK))
+		if (object_similar(gear_obj, obj, OSTACK_PACK))
 			break;
 	}
 
@@ -466,10 +534,10 @@ bool inven_stack_okay(const object_type *o_ptr)
 	if (!gear_obj) return FALSE;
 
 	/* Add it and see what happens */
-	gear_obj->number += o_ptr->number;
+	gear_obj->number += obj->number;
 	extra_slot = (gear_obj->number > z_info->stack_size);
 	new_number = pack_slots_used(player);
-	gear_obj->number -= o_ptr->number;
+	gear_obj->number -= obj->number;
 
 	/* Analyse the results */
 	if (new_number + (extra_slot ? 1 : 0) > z_info->pack_size)
@@ -513,7 +581,8 @@ void inven_item_charges(struct object *obj)
  * it is placed into the inventory, but takes no responsibility for removing
  * the object from any other pile it was in.
  */
-bool inven_carry(struct player *p, struct object *obj, bool message)
+bool inven_carry(struct player *p, struct object *obj, bool absorb,
+				 bool message)
 {
 	struct object *gear_obj;
 	char o_name[80];
@@ -521,39 +590,45 @@ bool inven_carry(struct player *p, struct object *obj, bool message)
 	/* Apply an autoinscription */
 	apply_autoinscription(obj);
 
-	/* Check for combining */
-	for (gear_obj = p->gear; gear_obj; gear_obj = gear_obj->next) {
-		/* Can't stack equipment */
-		if (object_is_equipped(p->body, gear_obj))
-			continue;
+	/* Check for combining, if appropriate */
+	if (absorb) {
+		for (gear_obj = p->gear; gear_obj; gear_obj = gear_obj->next) {
+			/* Can't stack equipment */
+			if (object_is_equipped(p->body, gear_obj))
+				continue;
 
-		/* Check if the two items can be combined */
-		if (object_similar(gear_obj, obj, OSTACK_PACK)) {
-			/* Increase the weight */
-			p->upkeep->total_weight += (obj->number * obj->weight);
+			/* Check if the two items can be combined */
+			if (object_similar(gear_obj, obj, OSTACK_PACK)) {
+				/* Increase the weight */
+				p->upkeep->total_weight += (obj->number * obj->weight);
 
-			/* Combine the items */
-			object_absorb(gear_obj, obj);
+				/* Combine the items */
+				object_absorb(gear_obj, obj);
 
-			/* Describe the combined object */
-			object_desc(o_name, sizeof(o_name), gear_obj,
-						ODESC_PREFIX | ODESC_FULL);
+				/* Describe the combined object */
+				object_desc(o_name, sizeof(o_name), gear_obj,
+							ODESC_PREFIX | ODESC_FULL);
 
-			/* Recalculate bonuses */
-			p->upkeep->update |= (PU_BONUS | PU_INVEN);
+				/* Recalculate bonuses */
+				p->upkeep->update |= (PU_BONUS | PU_INVEN);
 
-			/* Redraw stuff */
-			p->upkeep->redraw |= (PR_INVEN);
+				/* Redraw stuff */
+				p->upkeep->redraw |= (PR_INVEN);
 
-			/* Inventory will need updating */
-			update_stuff(player->upkeep);
+				/* Inventory will need updating */
+				update_stuff(player);
 
-			/* Optionally, display a message */
-			if (message)
-				msg("You have %s (%c).", o_name, gear_to_label(gear_obj));
+				/* Optionally, display a message */
+				if (message)
+					msg("You have %s (%c).", o_name, gear_to_label(gear_obj));
 
-			/* Success */
-			return TRUE;
+				/* Sound for quiver objects */
+				if (object_is_in_quiver(gear_obj))
+					sound(MSG_QUIVER);
+
+				/* Success */
+				return TRUE;
+			}
 		}
 	}
 
@@ -576,14 +651,14 @@ bool inven_carry(struct player *p, struct object *obj, bool message)
 	p->upkeep->redraw |= (PR_INVEN);
 
 	/* Inventory will need updating */
-	update_stuff(player->upkeep);
+	update_stuff(player);
 
 	/* Hobbits ID mushrooms on pickup, gnomes ID wands and staffs on pickup */
 	if (!object_is_known(obj)) {
-		if (player_has(PF_KNOW_MUSHROOM) && tval_is_mushroom(obj)) {
+		if (player_has(player, PF_KNOW_MUSHROOM) && tval_is_mushroom(obj)) {
 			do_ident_item(obj);
 			msg("Mushrooms for breakfast!");
-		} else if (player_has(PF_KNOW_ZAPPER) && tval_is_zapper(obj))
+		} else if (player_has(player, PF_KNOW_ZAPPER) && tval_is_zapper(obj))
 			do_ident_item(obj);
 	}
 
@@ -596,6 +671,10 @@ bool inven_carry(struct player *p, struct object *obj, bool message)
 		msg("You have %s (%c).", o_name, gear_to_label(obj));
 	}
 
+	/* Sound for quiver objects */
+	if (object_is_in_quiver(obj))
+		sound(MSG_QUIVER);
+
 	return TRUE;
 }
 
@@ -603,10 +682,11 @@ bool inven_carry(struct player *p, struct object *obj, bool message)
 /**
  * Take off a non-cursed equipment item
  *
- * Note that only one item at a time can be wielded per slot.
- *
  * Note that taking off an item when "full" may cause that item
  * to fall to the ground.
+ *
+ * Note also that this function does not try to combine the taken off item
+ * with other inventory items - that must be done by the calling function.
  */
 void inven_takeoff(struct object *obj)
 {
@@ -637,8 +717,7 @@ void inven_takeoff(struct object *obj)
 	msgt(MSG_WIELD, "%s %s (%c).", act, o_name, I2A(slot));
 
 	player->upkeep->update |= (PU_BONUS | PU_INVEN);
-	player->upkeep->notice |= (PN_IGNORE | PN_COMBINE);
-
+	player->upkeep->notice |= (PN_IGNORE);
 	return;
 }
 
@@ -654,37 +733,72 @@ void inven_drop(struct object *obj, int amt)
 {
 	int py = player->py;
 	int px = player->px;
-	int num = 0;
 	struct object *dropped;
+	bool none_left = FALSE;
+	bool quiver = FALSE;
 
-	char o_name[80];
+	char name[80];
+	char label;
 
 	/* Error check */
 	if (amt <= 0)
 		return;
 
+	/* Check it is still held, in case there were two drop commands queued
+	 * for this item.  This is in theory not ideal, but in practice should
+	 * be safe. */
+	if (!pile_contains(player->gear, obj))
+		return;
+
+	/* Get where the object is now */
+	label = gear_to_label(obj);
+
+	/* Is it in the quiver? */
+	if (object_is_in_quiver(obj))
+		quiver = TRUE;
+
 	/* Not too many */
 	if (amt > obj->number) amt = obj->number;
 
-	/* Take off equipment */
+	/* Take off equipment, don't combine */
 	if (object_is_equipped(player->body, obj))
 		inven_takeoff(obj);
 
-	/* Describe object */
-	num = obj->number;
-	object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
-	obj->number = num;
+	/* Get the object */
+	dropped = gear_object_for_use(obj, amt, FALSE, &none_left);
+
+	/* Describe the dropped object */
+	object_desc(name, sizeof(name), dropped, ODESC_PREFIX | ODESC_FULL);
 
 	/* Message */
-	msg("You drop %s (%c).", o_name, gear_to_label(obj));
+	msg("You drop %s (%c).", name, label);
 
-	/* Get the object */
-	dropped = gear_object_for_use(obj, amt, TRUE);
+	/* Describe what's left */
+	if (dropped->artifact) {
+		object_desc(name, sizeof(name), dropped,
+					ODESC_FULL | ODESC_SINGULAR);
+		msg("You no longer have the %s (%c).", name, label);
+	} else if (none_left) {
+		/* Play silly games to get the right description */
+		int number = dropped->number;
+		dropped->number = 0;
+		object_desc(name, sizeof(name), dropped, ODESC_PREFIX | ODESC_FULL);
+		msg("You have %s (%c).", name, label);
+		dropped->number = number;
+	} else {
+		object_desc(name, sizeof(name), obj, ODESC_PREFIX | ODESC_FULL);
+		msg("You have %s (%c).", name, label);
+	}
 
 	/* Drop it near the player */
 	drop_near(cave, dropped, 0, py, px, FALSE);
 
+	/* Sound for quiver objects */
+	if (quiver)
+		sound(MSG_QUIVER);
+
 	event_signal(EVENT_INVENTORY);
+	event_signal(EVENT_EQUIPMENT);
 }
 
 
@@ -692,19 +806,19 @@ void inven_drop(struct object *obj, int amt)
 /**
  * Return whether each stack of objects can be merged into two uneven stacks.
  */
-static bool inven_can_stack_partial(const object_type *o_ptr,
-									const object_type *j_ptr,
+static bool inven_can_stack_partial(const struct object *obj1,
+									const struct object *obj2,
 									object_stack_t mode)
 {
 	if (!(mode & OSTACK_STORE)) {
-		int total = o_ptr->number + j_ptr->number;
+		int total = obj1->number + obj2->number;
 		int remainder = total - (z_info->stack_size);
 
 		if (remainder > z_info->stack_size)
 			return FALSE;
 	}
 
-	return object_stackable(o_ptr, j_ptr, mode);
+	return object_stackable(obj1, obj2, mode);
 }
 
 /**
@@ -712,17 +826,19 @@ static bool inven_can_stack_partial(const object_type *o_ptr,
  */
 void combine_pack(void)
 {
-	struct object *obj1, *obj2;
+	struct object *obj1, *obj2, *prev;
 	bool display_message = FALSE;
 	bool redraw = FALSE;
 
 	/* Combine the pack (backwards) */
-	for (obj1 = gear_last_item(); obj1; obj1 = obj1->prev) {
+	obj1 = gear_last_item();
+	while (obj1) {
 		assert(obj1->kind);
 		assert(!tval_is_money(obj1));
+		prev = obj1->prev;
 
 		/* Scan the items above that item */
-		for (obj2 = player->gear; obj2 != obj1; obj2 = obj2->next) {
+		for (obj2 = player->gear; obj2 && obj2 != obj1; obj2 = obj2->next) {
 			assert(obj2->kind);
 
 			/* Can we drop "obj1" onto "obj2"? */
@@ -730,6 +846,7 @@ void combine_pack(void)
 				display_message = TRUE;
 				redraw = TRUE;
 				object_absorb(obj2, obj1);
+				break;
 			} else if (inven_can_stack_partial(obj2, obj1, OSTACK_PACK)) {
 				/* Setting this to TRUE spams the combine message. */
 				display_message = FALSE;
@@ -738,11 +855,14 @@ void combine_pack(void)
 				break;
 			}
 		}
+		obj1 = prev;
 	}
+
+	calc_inventory(player->upkeep, player->gear, player->body);
 
 	/* Redraw stuff */
 	if (redraw) {
-		player->upkeep->redraw |= (PR_INVEN);
+		player->upkeep->redraw |= (PR_INVEN | PR_EQUIP);
 		player->upkeep->update |= (PU_INVEN);
 	}
 
@@ -775,10 +895,9 @@ bool pack_is_overfull(void)
 /**
  * Overflow an item from the pack, if it is overfull.
  */
-void pack_overflow(void)
+void pack_overflow(struct object *obj)
 {
 	int i;
-	struct object *obj = NULL;
 	char o_name[80];
 
 	if (!pack_is_overfull()) return;
@@ -789,13 +908,15 @@ void pack_overflow(void)
 	/* Warning */
 	msg("Your pack overflows!");
 
-	/* Find the last inventory item */
+	/* Get the last proper item */
 	for (i = 1; i <= z_info->pack_size; i++)
 		if (!player->upkeep->inven[i])
 			break;
 
-	/* Last object was the previous index */
-	obj = player->upkeep->inven[i - 1];
+	/* Drop the last inventory item unless requested otherwise */
+	if (!obj) {
+		obj = player->upkeep->inven[i - 1];
+	}
 
 	/* Rule out weirdness (like pack full, but inventory empty) */
 	assert(obj != NULL);
@@ -804,7 +925,7 @@ void pack_overflow(void)
 	object_desc(o_name, sizeof(o_name), obj, ODESC_PREFIX | ODESC_FULL);
 
 	/* Message */
-	msg("You drop %s (%c).", o_name, I2A(i - 1));
+	msg("You drop %s.", o_name);
 
 	/* Excise the object and drop it (carefully) near the player */
 	gear_excise_object(obj);
@@ -812,16 +933,16 @@ void pack_overflow(void)
 
 	/* Describe */
 	if (obj->artifact)
-		msg("You no longer have the %s (%c).", o_name, I2A(i - 1));
+		msg("You no longer have the %s.", o_name);
 	else
-		msg("You no longer have %s (%c).", o_name, I2A(i - 1));
+		msg("You no longer have %s.", o_name);
 
 	/* Notice stuff (if needed) */
-	if (player->upkeep->notice) notice_stuff(player->upkeep);
+	if (player->upkeep->notice) notice_stuff(player);
 
 	/* Update stuff (if needed) */
-	if (player->upkeep->update) update_stuff(player->upkeep);
+	if (player->upkeep->update) update_stuff(player);
 
 	/* Redraw stuff (if needed) */
-	if (player->upkeep->redraw) redraw_stuff(player->upkeep);
+	if (player->upkeep->redraw) redraw_stuff(player);
 }

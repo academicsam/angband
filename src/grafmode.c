@@ -25,7 +25,7 @@ graphics_mode *graphics_modes;
 graphics_mode *current_graphics_mode = NULL;
 int graphics_mode_high_id;
 
-static enum parser_error parse_graf_n(struct parser *p) {
+static enum parser_error parse_graf_name(struct parser *p) {
 	graphics_mode *list = parser_priv(p);
 	graphics_mode *mode = mem_zalloc(sizeof(graphics_mode));
 	if (!mode) {
@@ -45,7 +45,20 @@ static enum parser_error parse_graf_n(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
-static enum parser_error parse_graf_i(struct parser *p) {
+static enum parser_error parse_graf_directory(struct parser *p) {
+	graphics_mode *mode = parser_priv(p);
+	const char *dir = parser_getsym(p, "dirname");
+	if (!mode) {
+		return PARSE_ERROR_INVALID_VALUE;
+	}
+
+	/* Build a usable path */
+	path_build(mode->path, sizeof(mode->path), ANGBAND_DIR_TILES, dir);
+
+	return PARSE_ERROR_NONE;
+}
+
+static enum parser_error parse_graf_size(struct parser *p) {
 	graphics_mode *mode = parser_priv(p);
 	if (!mode) {
 		return PARSE_ERROR_INVALID_VALUE;
@@ -56,7 +69,7 @@ static enum parser_error parse_graf_i(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
-static enum parser_error parse_graf_p(struct parser *p) {
+static enum parser_error parse_graf_pref(struct parser *p) {
 	graphics_mode *mode = parser_priv(p);
 	if (!mode) {
 		return PARSE_ERROR_INVALID_VALUE;
@@ -65,7 +78,7 @@ static enum parser_error parse_graf_p(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
-static enum parser_error parse_graf_x(struct parser *p) {
+static enum parser_error parse_graf_extra(struct parser *p) {
 	graphics_mode *mode = parser_priv(p);
 	if (!mode) {
 		return PARSE_ERROR_INVALID_VALUE;
@@ -80,11 +93,11 @@ static struct parser *init_parse_grafmode(void) {
 	struct parser *p = parser_new();
 	parser_setpriv(p, NULL);
 
-	parser_reg(p, "V sym version", ignored);
-	parser_reg(p, "N uint index str menuname", parse_graf_n);
-	parser_reg(p, "I uint wid uint hgt str filename", parse_graf_i);
-	parser_reg(p, "P str prefname", parse_graf_p);
-	parser_reg(p, "X uint alpha uint row uint max", parse_graf_x);
+	parser_reg(p, "name uint index str menuname", parse_graf_name);
+	parser_reg(p, "directory sym dirname", parse_graf_directory);
+	parser_reg(p, "size uint wid uint hgt str filename", parse_graf_size);
+	parser_reg(p, "pref str prefname", parse_graf_pref);
+	parser_reg(p, "extra uint alpha uint row uint max", parse_graf_extra);
 
 	return p;
 }
@@ -120,7 +133,7 @@ static errr finish_parse_grafmode(struct parser *p) {
 			graphics_modes[i].pNext = &(graphics_modes[i+1]);
 		}
 	}
-	
+
 	/* Hardcode the no graphics option */
 	graphics_modes[count].pNext = NULL;
 	graphics_modes[count].grafID = GRAPHICS_NONE;
@@ -128,14 +141,15 @@ static errr finish_parse_grafmode(struct parser *p) {
 	graphics_modes[count].overdrawRow = 0;
 	graphics_modes[count].overdrawMax = 0;
 	strncpy(graphics_modes[count].pref, "none", 8);
+	strncpy(graphics_modes[count].path, "", 32);
 	strncpy(graphics_modes[count].file, "", 32);
 	strncpy(graphics_modes[count].menuname, "None", 32);
-	
+
 	graphics_mode_high_id = max;
 
 	/* Set the default graphics mode to be no graphics */
 	current_graphics_mode = &(graphics_modes[count]);
-	
+
 	if (p) {
 		mode = parser_priv(p);
 		while (mode) {
@@ -158,7 +172,7 @@ static void print_error(const char *name, struct parser *p) {
 	event_signal(EVENT_MESSAGE_FLUSH);
 }
 
-bool init_graphics_modes(const char *filename) {
+bool init_graphics_modes(void) {
 	char buf[1024];
 
 	ang_file *f;
@@ -168,7 +182,7 @@ bool init_graphics_modes(const char *filename) {
 	int line_no = 0;
 
 	/* Build the filename */
-	path_build(buf, sizeof(buf), ANGBAND_DIR_XTRA_GRAF, filename);
+	path_build(buf, sizeof(buf), ANGBAND_DIR_TILES, "list.txt");
 
 	f = file_open(buf, MODE_READ, FTYPE_TEXT);
 	if (!f) {
@@ -203,7 +217,7 @@ void close_graphics_modes(void) {
 	}
 }
 
-graphics_mode* get_graphics_mode(byte id) {
+graphics_mode *get_graphics_mode(byte id) {
 	graphics_mode *test = graphics_modes;
 	while (test) {
 		if (test->grafID == id) {

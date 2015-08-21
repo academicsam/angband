@@ -1,6 +1,6 @@
 /**
-   \file effects.h
-   \brief effect handling
+ * \file effects.h
+ * \brief effect handling
  *
  * Copyright (c) 2007 Andi Sidwell
  * Copyright (c) 2014 Ben Semmler, Nick McConnell
@@ -23,7 +23,7 @@
 typedef enum
 {
 	EF_NONE,
-	#define EFFECT(x, a, b, d)	EF_##x,
+	#define EFFECT(x, a, b, c, d, e)	EF_##x,
 	#include "list-effects.h"
 	#undef EFFECT
 	EF_MAX
@@ -46,7 +46,7 @@ bool effect_aim(struct effect *effect);
 const char *effect_info(struct effect *effect);
 const char *effect_desc(struct effect *effect);
 effect_index effect_lookup(const char *name);
-int effect_param(const char *type);
+int effect_param(int index, const char *type);
 bool effect_do(struct effect *effect, bool *ident, bool aware, int dir, int beam, int boost);
 void effect_simple(int index, const char* dice_string, int p1, int p2, int p3, bool *ident);
 

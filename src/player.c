@@ -19,8 +19,8 @@
 #include "init.h"
 #include "obj-pile.h"
 #include "obj-util.h"
-#include "player.h"
 #include "player-birth.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-quest.h"
 #include "player-spell.h"
@@ -42,7 +42,7 @@ player_other *op_ptr = &player_other_body;
 /**
  * Pointer to the player struct
  */
-player_type *player;
+struct player *player;
 
 struct player_body *bodies;
 struct player_race *races;
@@ -227,7 +227,7 @@ static void adjust_level(struct player *p, bool verbose)
 
 	p->upkeep->redraw |= PR_EXP;
 
-	handle_stuff(p->upkeep);
+	handle_stuff(p);
 
 	while ((p->lev > 1) &&
 	       (p->exp < (player_exp[p->lev-2] * p->expfact / 100L)))
@@ -264,9 +264,9 @@ static void adjust_level(struct player *p, bool verbose)
 	       (p->max_exp >= (player_exp[p->max_lev-1] * p->expfact / 100L)))
 		p->max_lev++;
 
-	p->upkeep->update |= (PU_BONUS | PU_HP | PU_MANA | PU_SPELLS);
+	p->upkeep->update |= (PU_BONUS | PU_HP | PU_SPELLS);
 	p->upkeep->redraw |= (PR_LEV | PR_TITLE | PR_EXP | PR_STATS);
-	handle_stuff(p->upkeep);
+	handle_stuff(p);
 }
 
 void player_exp_gain(struct player *p, s32b amount)
@@ -296,7 +296,7 @@ void player_flags(struct player *p, bitflag f[OF_SIZE])
 	memcpy(f, p->race->flags, sizeof(p->race->flags));
 
 	/* Some classes become immune to fear at a certain plevel */
-	if (player_has(PF_BRAVERY_30) && p->lev >= 30)
+	if (player_has(p, PF_BRAVERY_30) && p->lev >= 30)
 		of_on(f, OF_PROT_FEAR);
 }
 
@@ -390,7 +390,7 @@ static void init_player(void) {
 	player = mem_zalloc(sizeof *player);
 
 	/* Allocate player sub-structs */
-	player->upkeep = mem_zalloc(sizeof(player_upkeep));
+	player->upkeep = mem_zalloc(sizeof(struct player_upkeep));
 	player->upkeep->inven = mem_zalloc((z_info->pack_size + 1) * sizeof(struct object *));
 	player->upkeep->quiver = mem_zalloc(z_info->quiver_size * sizeof(struct object *));
 	player->timed = mem_zalloc(TMD_MAX * sizeof(s16b));
@@ -402,22 +402,30 @@ static void init_player(void) {
 static void cleanup_player(void) {
 	int i;
 
-	player_quests_free(player);
-	player_spells_free(player);
-
+	/* Free the things that are always initialised */
 	mem_free(player->timed);
 	mem_free(player->upkeep->quiver);
 	mem_free(player->upkeep->inven);
 	mem_free(player->upkeep);
-	object_pile_free(player->gear);
-	object_pile_free(player->gear_k);
-	for (i = 0; i < player->body.count; i++)
-		string_free(player->body.slots[i].name);
-	mem_free(player->body.slots);
-	string_free(player->body.name);
-	mem_free(player->history);
+	player->upkeep = NULL;
 
+	/* Free the things that are only there if there is a loaded player -
+	 * checking if there are quests will suffice */
+	if (player->quests) {
+		player_quests_free(player);
+		player_spells_free(player);
+		object_pile_free(player->gear);
+		object_pile_free(player->gear_k);
+		for (i = 0; i < player->body.count; i++)
+			string_free(player->body.slots[i].name);
+		mem_free(player->body.slots);
+		string_free(player->body.name);
+		mem_free(player->history);
+	}
+
+	/* Free the basic player struct */
 	mem_free(player);
+	player = NULL;
 }
 
 struct init_module player_module = {

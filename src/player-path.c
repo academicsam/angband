@@ -24,6 +24,7 @@
 #include "mon-util.h"
 #include "obj-ignore.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-path.h"
 #include "player-util.h"
 
@@ -35,12 +36,12 @@
 /**
  * Maximum size around the player to consider in the pathfinder
  */
-#define MAX_PF_RADIUS 50
+#define MAX_PF_RADIUS 100
 
 /**
  * Maximum distance to consider in the pathfinder
  */
-#define MAX_PF_LENGTH 250
+#define MAX_PF_LENGTH 500
 
 
 static int terrain[MAX_PF_RADIUS][MAX_PF_RADIUS];
@@ -548,10 +549,10 @@ static bool run_test(void)
 
 		/* Visible monsters abort running */
 		if (cave->squares[row][col].mon > 0) {
-			monster_type *m_ptr = square_monster(cave, row, col);
+			struct monster *mon = square_monster(cave, row, col);
 
 			/* Visible monster */
-			if (mflag_has(m_ptr->mflag, MFLAG_VISIBLE)) return (TRUE);
+			if (mflag_has(mon->mflag, MFLAG_VISIBLE)) return (TRUE);
 		}
 
 		/* Visible objects abort running */
@@ -564,7 +565,7 @@ static bool run_test(void)
 
 		/* Check memorized grids */
 		if (square_ismark(cave, row, col)) {
-			bool notice = square_noticeable(cave, row, col);
+			bool notice = square_isinteresting(cave, row, col);
 
 			/* Interesting feature */
 			if (notice) return (TRUE);
@@ -625,10 +626,10 @@ static bool run_test(void)
 
 		/* Visible monsters abort running */
 		if (cave->squares[row][col].mon > 0) {
-			monster_type *m_ptr = square_monster(cave, row, col);
+			struct monster *mon = square_monster(cave, row, col);
 			
 			/* Visible monster */
-			if (mflag_has(m_ptr->mflag, MFLAG_VISIBLE) && !is_mimicking(m_ptr))
+			if (mflag_has(mon->mflag, MFLAG_VISIBLE) && !is_mimicking(mon))
 				return (TRUE);
 		}
 	}
@@ -719,8 +720,6 @@ static bool run_test(void)
  */
 void run_step(int dir)
 {
-	int x, y;
-
 	/* Start or continue run */
 	if (dir) {
 		/* Initialize */
@@ -740,18 +739,16 @@ void run_step(int dir)
 				disturb(player, 0);
 				return;
 			}
+		} else if (pf_result_index < 0) {
+			/* Pathfinding, and the path is finished */
+			disturb(player, 0);
+			player->upkeep->running_withpathfind = FALSE;
+			return;
 		} else {
-			/* Pathfinding */
-			if (pf_result_index < 0) {
-				/* Abort if the path is finished */
-				disturb(player, 0);
-				player->upkeep->running_withpathfind = FALSE;
-				return;
-			} else if (pf_result_index == 0) {
-				/* Abort if we would hit a wall */
-				y = player->py + ddy[pf_result[pf_result_index] - '0'];
-				x = player->px + ddx[pf_result[pf_result_index] - '0'];
+			int y = player->py + ddy[pf_result[pf_result_index] - '0'];
+			int x = player->px + ddx[pf_result[pf_result_index] - '0'];
 
+			if (pf_result_index == 0) {
 				/* Known wall */
 				if (square_ismark(cave, y, x) &&
 					!square_ispassable(cave, y, x)) {
@@ -760,6 +757,8 @@ void run_step(int dir)
 					return;
 				}
 			} else if (pf_result_index > 0) {
+				struct object *obj;
+
 				/* If the player has computed a path that is going to end up
 				 * in a wall, we notice this and convert to a normal run. This
 				 * allows us to click on unknown areas to explore the map.
@@ -773,6 +772,27 @@ void run_step(int dir)
 				/* Known wall */
 				if (square_ismark(cave, y, x) &&
 					!square_ispassable(cave, y, x)) {
+					disturb(player, 0);
+					player->upkeep->running_withpathfind = FALSE;
+					return;
+				}
+
+				/* Visible monsters abort running */
+				if (cave->squares[y][x].mon > 0) {
+					struct monster *mon = square_monster(cave, y, x);
+
+					/* Visible monster */
+					if (mflag_has(mon->mflag, MFLAG_VISIBLE)) {
+						disturb(player, 0);
+						player->upkeep->running_withpathfind = FALSE;
+						return;
+					}
+				}
+
+				/* Visible objects abort running */
+				for (obj = square_object(cave, y, x); obj; obj = obj->next)
+					/* Visible object */
+					if (obj->marked && !ignore_item_ok(obj)) {
 					disturb(player, 0);
 					player->upkeep->running_withpathfind = FALSE;
 					return;
@@ -798,12 +818,14 @@ void run_step(int dir)
 	/* Decrease counter if it hasn't been cancelled */
 	if (player->upkeep->running)
 		player->upkeep->running--;
+	else if (!player->upkeep->running_withpathfind)
+		return;
 
 	/* Take time */
 	player->upkeep->energy_use = z_info->move_energy;
 
-	/* Move the player */
-	move_player(run_cur_dir, TRUE);
+	/* Move the player; running straight into a trap == trying to disarm */
+	move_player(run_cur_dir, dir ? TRUE : FALSE);
 
 	/* Prepare the next step */
 	if (player->upkeep->running) {

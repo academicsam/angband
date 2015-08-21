@@ -20,10 +20,13 @@
 #include "angband.h"
 #include "cmds.h"
 #include "game-world.h"
+#include "grafmode.h"
 #include "init.h"
 #include "mon-lore.h"
+#include "mon-make.h"
 #include "obj-util.h"
 #include "player-attack.h"
+#include "player-calcs.h"
 #include "player-path.h"
 #include "player-util.h"
 #include "savefile.h"
@@ -117,6 +120,7 @@ struct cmd_info cmd_item_manage[] =
 {
 	{ "Display equipment listing", { 'e' }, CMD_NULL, do_cmd_equip },
 	{ "Display inventory listing", { 'i' }, CMD_NULL, do_cmd_inven },
+	{ "Display quiver listing", { '|' }, CMD_NULL, do_cmd_quiver },
 	{ "Pick up objects", { 'g' }, CMD_PICKUP, NULL },
 	{ "Ignore an item", { 'k', KTRL('D') }, CMD_IGNORE, textui_cmd_ignore },	
 };
@@ -168,7 +172,6 @@ struct cmd_info cmd_hidden[] =
 	{ "Take notes", { ':' }, CMD_NULL, do_cmd_note },
 	{ "Version info", { 'V' }, CMD_NULL, do_cmd_version },
 	{ "Load a single pref line", { '"' }, CMD_NULL, do_cmd_pref },
-	{ "Enter a store", { '_' }, CMD_NULL, textui_enter_store },
 	{ "Toggle windows", { KTRL('E') }, CMD_NULL, toggle_inven_equip }, /* XXX */
 	{ "Alter a grid", { '+' }, CMD_ALTER, NULL },
 	{ "Walk", { ';' }, CMD_WALK, NULL },
@@ -355,6 +358,28 @@ void check_for_player_interrupt(game_event_type type, game_event_data *data,
 	}
 }
 
+void pre_turn_refresh(void)
+{
+	term *old = Term;
+	int j;
+	if (character_dungeon) {
+		/* Redraw map */
+		player->upkeep->redraw |= (PR_MAP | PR_STATE);
+		player->upkeep->redraw |= (PR_MONLIST | PR_ITEMLIST);
+		handle_stuff(player);
+
+		move_cursor_relative(player->px, player->py);
+
+		for (j = 0; j < ANGBAND_TERM_MAX; j++) {
+			if (!angband_term[j]) continue;
+
+			Term_activate(angband_term[j]);
+			Term_fresh();
+		}
+	}
+	Term_activate(old);
+}
+
 /**
  * Start actually playing a game, either by loading a savefile or creating
  * a new character
@@ -377,6 +402,7 @@ static void start_game(bool new_game)
 	/* Tell the UI we've started. */
 	event_signal(EVENT_LEAVE_INIT);
 	event_signal(EVENT_ENTER_GAME);
+	event_signal(EVENT_ENTER_WORLD);
 
 	/* Save not required yet. */
 	player->upkeep->autosave = FALSE;
@@ -398,6 +424,8 @@ void play_game(bool new_game)
 	/* Get commands from the user, then process the game world until the
 	 * command queue is empty and a new player command is needed */
 	while (!player->is_dead && player->upkeep->playing) {
+		if (current_graphics_mode && current_graphics_mode->overdrawRow)
+			pre_turn_refresh();
 		cmd_get_hook(CMD_GAME);
 		run_game_loop();
 	}
@@ -430,7 +458,6 @@ void savefile_set_name(const char *fname)
  */
 void save_game(void)
 {
-	char name[80];
 	char path[1024];
 
 	/* Disturb the player */
@@ -440,7 +467,7 @@ void save_game(void)
 	event_signal(EVENT_MESSAGE_FLUSH);
 
 	/* Handle stuff */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Message */
 	prt("Saving game...", 0, 0);
@@ -464,10 +491,18 @@ void save_game(void)
 	Term_fresh();
 
 	/* Save the window prefs */
-	strnfmt(name, sizeof(name), "%s.prf", player_safe_name(player, TRUE));
-	path_build(path, sizeof(path), ANGBAND_DIR_USER, name);
+	path_build(path, sizeof(path), ANGBAND_DIR_USER, "window.prf");
 	if (!prefs_save(path, option_dump, "Dump window settings"))
 		prt("Failed to save subwindow preferences", 0, 0);
+
+	/* Refresh */
+	Term_fresh();
+
+	/* Save monster memory to user directory */
+	if (!lore_save("lore.txt")) {
+		msg("lore save failed!");
+		event_signal(EVENT_MESSAGE_FLUSH);
+	}
 
 	/* Allow suspend again */
 	signals_handle_tstp();
@@ -491,11 +526,11 @@ void save_game(void)
  */
 void close_game(void)
 {
-	/* Tell the UI we're done with the game state */
-	event_signal(EVENT_LEAVE_GAME);
+	/* Tell the UI we're done with the world */
+	event_signal(EVENT_LEAVE_WORLD);
 
 	/* Handle stuff */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Flush the messages */
 	event_signal(EVENT_MESSAGE_FLUSH);
@@ -508,12 +543,6 @@ void close_game(void)
 
 	/* Hack -- Increase "icky" depth */
 	screen_save_depth++;
-
-	/* Save monster memory to user directory */
-	if (!lore_save("lore.txt")) {
-		msg("lore save failed!");
-		event_signal(EVENT_MESSAGE_FLUSH);
-	}
 
 	/* Handle death or life */
 	if (player->is_dead) {
@@ -539,8 +568,14 @@ void close_game(void)
 		}
 	}
 
+	/* Wipe the monster list */
+	wipe_mon_list(cave, player);
+
 	/* Hack -- Decrease "icky" depth */
 	screen_save_depth--;
+
+	/* Tell the UI we're done with the game state */
+	event_signal(EVENT_LEAVE_GAME);
 
 	/* Allow suspending now */
 	signals_handle_tstp();

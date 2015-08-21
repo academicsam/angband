@@ -22,6 +22,7 @@
 #include "mon-desc.h"
 #include "obj-gear.h"
 #include "obj-identify.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "player-util.h"
 #include "project.h"
@@ -41,10 +42,12 @@ int adjust_dam(struct player *p, int type, int dam, aspect dam_aspect, int resis
 
 	/* If an actual player exists, get their actual resist */
 	if (p && p->race) {
-		resist = p->state.el_info[type].res_level;
+		/* Ice is a special case */
+		int res_type = (type == GF_ICE) ? GF_COLD: type;
+		resist = p->state.el_info[res_type].res_level;
 
 		/* Notice element stuff */
-		equip_notice_element(p, type);
+		equip_notice_element(p, res_type);
 	}
 
 	if (resist == 3) /* immune */
@@ -179,7 +182,7 @@ static void project_player_handler_COLD(project_player_handler_context_t *contex
 
 static void project_player_handler_POIS(project_player_handler_context_t *context)
 {
-	if (!player_inc_timed(player, TMD_POISONED, 10 + randint0(context->dam),
+	if (!player_inc_timed(player, TMD_POISONED, 10 + randint1(context->dam),
 						  TRUE, TRUE))
 		msg("You resist the effect!");
 }
@@ -206,6 +209,11 @@ static void project_player_handler_DARK(project_player_handler_context_t *contex
 
 static void project_player_handler_SOUND(project_player_handler_context_t *context)
 {
+	if (player_resists(player, ELEM_SOUND)) {
+		msg("You resist the effect!");
+		return;
+	}
+
 	/* Stun */
 	if (!player_of_has(player, OF_PROT_STUN)) {
 		int duration = 5 + randint1(context->dam / 3);
@@ -216,9 +224,14 @@ static void project_player_handler_SOUND(project_player_handler_context_t *conte
 
 static void project_player_handler_SHARD(project_player_handler_context_t *context)
 {
+	if (player_resists(player, ELEM_SHARD)) {
+		msg("You resist the effect!");
+		return;
+	}
+
 	/* Cuts */
-	if (!player_resists(player, ELEM_SHARD))
-		(void)player_inc_timed(player, TMD_CUT, context->dam, TRUE, FALSE);
+	(void)player_inc_timed(player, TMD_CUT, randint1(context->dam), TRUE,
+						   FALSE);
 }
 
 static void project_player_handler_NEXUS(project_player_handler_context_t *context)
@@ -253,6 +266,8 @@ static void project_player_handler_NEXUS(project_player_handler_context_t *conte
 
 static void project_player_handler_NETHER(project_player_handler_context_t *context)
 {
+	int drain = 200 + (player->exp / 100) * z_info->life_drain_percent;
+
 	if (player_resists(player, ELEM_NETHER) ||
 		player_of_has(player, OF_HOLD_LIFE)) {
 		msg("You resist the effect!");
@@ -261,7 +276,7 @@ static void project_player_handler_NETHER(project_player_handler_context_t *cont
 
 	/* Life draining */
 	msg("You feel your life force draining away!");
-	player_exp_lose(player, 200 + (player->exp / 100) * z_info->life_drain_percent, FALSE);
+	player_exp_lose(player, drain, FALSE);
 }
 
 static void project_player_handler_CHAOS(project_player_handler_context_t *context)
@@ -278,9 +293,10 @@ static void project_player_handler_CHAOS(project_player_handler_context_t *conte
 	(void)player_inc_timed(player, TMD_CONFUSED, 10 + randint0(20), TRUE, TRUE);
 
 	/* Life draining */
-	if (player_of_has(player, OF_HOLD_LIFE)) {
+	if (!player_of_has(player, OF_HOLD_LIFE)) {
+		int drain = 5000 + (player->exp / 100) * z_info->life_drain_percent;
 		msg("You feel your life force draining away!");
-		player_exp_lose(player, 5000 + (player->exp / 100) * z_info->life_drain_percent, FALSE);
+		player_exp_lose(player, drain, FALSE);
 	}
 }
 
@@ -301,7 +317,7 @@ static void project_player_handler_WATER(project_player_handler_context_t *conte
 	(void)player_inc_timed(player, TMD_CONFUSED, 5 + randint1(5), TRUE, TRUE);
 
 	/* Stun */
-	(void)player_inc_timed(player, TMD_STUN, randint0(40), TRUE, TRUE);
+	(void)player_inc_timed(player, TMD_STUN, randint1(40), TRUE, TRUE);
 }
 
 static void project_player_handler_ICE(project_player_handler_context_t *context)
@@ -316,7 +332,7 @@ static void project_player_handler_ICE(project_player_handler_context_t *context
 		msg("You resist the effect!");
 
 	/* Stun */
-	(void)player_inc_timed(player, TMD_STUN, randint0(15), TRUE, TRUE);
+	(void)player_inc_timed(player, TMD_STUN, randint1(15), TRUE, TRUE);
 }
 
 static void project_player_handler_GRAVITY(project_player_handler_context_t *context)
@@ -349,23 +365,21 @@ static void project_player_handler_INERTIA(project_player_handler_context_t *con
 static void project_player_handler_FORCE(project_player_handler_context_t *context)
 {
 	/* Stun */
-	(void)player_inc_timed(player, TMD_STUN, randint0(20), TRUE, TRUE);
+	(void)player_inc_timed(player, TMD_STUN, randint1(20), TRUE, TRUE);
 }
 
 static void project_player_handler_TIME(project_player_handler_context_t *context)
 {
-	/* Life draining */
 	if (one_in_(2)) {
+		/* Life draining */
+		int drain = 100 + (player->exp / 100) * z_info->life_drain_percent;
 		msg("You feel your life force draining away!");
-		player_exp_lose(player, 100 + (player->exp / 100) * z_info->life_drain_percent, FALSE);
-	}
-
-	/* Drain some stats */
-	else if (!one_in_(5))
+		player_exp_lose(player, drain, FALSE);
+	} else if (!one_in_(5)) {
+		/* Drain some stats */
 		project_player_drain_stats(2);
-
-	/* Drain all stats */
-	else {
+	} else {
+		/* Drain all stats */
 		int i;
 		msg("You're not as powerful as you used to be...");
 
@@ -404,14 +418,48 @@ static void project_player_handler_ARROW(project_player_handler_context_t *conte
 {
 }
 
+static void project_player_handler_LIGHT_WEAK(project_player_handler_context_t *context)
+{
+}
+
+static void project_player_handler_DARK_WEAK(project_player_handler_context_t *context)
+{
+	if (player_resists(player, ELEM_DARK)) {
+		msg("You resist the effect!");
+		return;
+	}
+
+	(void)player_inc_timed(player, TMD_BLIND, 3 + randint1(5), TRUE, TRUE);
+}
+
+static void project_player_handler_KILL_WALL(project_player_handler_context_t *context)
+{
+}
+
+static void project_player_handler_KILL_DOOR(project_player_handler_context_t *context)
+{
+}
+
+static void project_player_handler_KILL_TRAP(project_player_handler_context_t *context)
+{
+}
+
+static void project_player_handler_MAKE_DOOR(project_player_handler_context_t *context)
+{
+}
+
+static void project_player_handler_MAKE_TRAP(project_player_handler_context_t *context)
+{
+}
+
 static const project_player_handler_f player_handlers[] = {
 	#define ELEM(a, b, c, d, e, f, g, h, i, col) project_player_handler_##a,
 	#include "list-elements.h"
 	#undef ELEM
-	#define PROJ_ENV(a, col) NULL,
+	#define PROJ_ENV(a, col, desc) project_player_handler_##a,
 	#include "list-project-environs.h"
 	#undef PROJ_ENV
-	#define PROJ_MON(a, obv) NULL, 
+	#define PROJ_MON(a, obv, desc) NULL, 
 	#include "list-project-monsters.h"
 	#undef PROJ_MON
 	NULL
@@ -443,7 +491,7 @@ bool project_p(int who, int r, int y, int x, int dam, int typ)
 	bool obvious = TRUE;
 
 	/* Source monster */
-	monster_type *m_ptr;
+	struct monster *mon;
 
 	/* Monster name (for damage) */
 	char killer[80];
@@ -466,20 +514,20 @@ bool project_p(int who, int r, int y, int x, int dam, int typ)
 	if (cave->squares[y][x].mon == who) return (FALSE);
 
 	/* Source monster */
-	m_ptr = cave_monster(cave, who);
+	mon = cave_monster(cave, who);
 
 	/* Player blind-ness */
 	blind = (player->timed[TMD_BLIND] ? TRUE : FALSE);
 
 	/* Extract the "see-able-ness" */
-	seen = (!blind && mflag_has(m_ptr->mflag, MFLAG_VISIBLE));
+	seen = (!blind && mflag_has(mon->mflag, MFLAG_VISIBLE));
 
 	/* Get the monster's real name */
-	monster_desc(killer, sizeof(killer), m_ptr, MDESC_DIED_FROM);
+	monster_desc(killer, sizeof(killer), mon, MDESC_DIED_FROM);
 
 	/* Let player know what is going on */
 	if (!seen)
-		msg("You are hit by %s!", gf_desc(typ));
+		msg("You are hit by %s!", gf_blind_desc(typ));
 
 	/* Adjust damage for resistance, immunity or vulnerability, and apply it */
 	dam = adjust_dam(player, typ, dam, RANDOMISE,

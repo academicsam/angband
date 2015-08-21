@@ -73,7 +73,7 @@ static void print_tomb(void)
 	(void)time(&death_time);
 
 	/* Open the death file */
-	path_build(buf, sizeof(buf), ANGBAND_DIR_FILE, "dead.txt");
+	path_build(buf, sizeof(buf), ANGBAND_DIR_SCREENS, "dead.txt");
 	fp = file_open(buf, MODE_READ, FTYPE_TEXT);
 
 	if (fp) {
@@ -120,7 +120,7 @@ static void display_winner(void)
 	int width = 0;
 
 
-	path_build(buf, sizeof(buf), ANGBAND_DIR_FILE, "crown.txt");
+	path_build(buf, sizeof(buf), ANGBAND_DIR_SCREENS, "crown.txt");
 	fp = file_open(buf, MODE_READ, FTYPE_TEXT);
 
 	Term_clear();
@@ -216,7 +216,7 @@ static void death_info(const char *title, int row)
 	/* Home -- if anything there */
 	if (home->stock) {
 		int page;
-		object_type *obj = home->stock;
+		struct object *obj = home->stock;
 
 		/* Display contents of the home */
 		for (page = 1; obj; page++) {
@@ -337,7 +337,6 @@ static void death_randarts(const char *title, int row)
  * Menu structures for the death menu. Note that Quit must always be the
  * last option, due to a hard-coded check in death_screen
  */
-static struct menu *death_menu;
 static menu_action death_actions[] =
 {
 	{ 0, 'i', "Information",   death_info      },
@@ -358,6 +357,7 @@ static menu_action death_actions[] =
  */
 void death_screen(void)
 {
+	struct menu *death_menu;
 	bool done = FALSE;
 	const region area = { 51, 2, 0, N_ELEMENTS(death_actions) };
 
@@ -375,13 +375,10 @@ void death_screen(void)
 	event_signal(EVENT_MESSAGE_FLUSH);
 
 	/* Display and use the death menu */
-	if (!death_menu)
-	{
-		death_menu = menu_new_action(death_actions,
-				N_ELEMENTS(death_actions));
+	death_menu = menu_new_action(death_actions,
+			N_ELEMENTS(death_actions));
 
-		death_menu->flags = MN_CASELESS_TAGS;
-	}
+	death_menu->flags = MN_CASELESS_TAGS;
 
 	menu_layout(death_menu, &area);
 
@@ -397,4 +394,6 @@ void death_screen(void)
 			done = get_check("Do you want to quit? ");
 		}
 	}
+
+	menu_free(death_menu);
 }

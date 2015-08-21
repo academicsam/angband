@@ -36,6 +36,7 @@
 #include "obj-slays.h"
 #include "obj-util.h"
 #include "player-attack.h"
+#include "player-calcs.h"
 #include "player-util.h"
 #include "project.h"
 #include "target.h"
@@ -267,12 +268,12 @@ static const struct {
 /**
  * Return the player's chance to hit with a particular weapon.
  */
-int py_attack_hit_chance(const object_type *weapon)
+int py_attack_hit_chance(const struct object *weapon)
 {
 	int chance, bonus = player->state.to_h;
 
 	if (weapon)
-		bonus += player->state.to_h;
+		bonus += weapon->to_h;
 	chance = player->state.skills[SKILL_TO_HIT_MELEE] + bonus * BTH_PLUS_ADJ;
 	return chance;
 }
@@ -349,11 +350,11 @@ static bool py_attack_real(int y, int x, bool *fear)
 		for (j = 2; j < player->body.count; j++) {
 			struct object *obj = slot_object(player, j);
 			if (obj)
-				improve_attack_modifier(obj, mon, &b, &s, verb, TRUE, FALSE);
+				improve_attack_modifier(obj, mon, &b, &s, verb, FALSE, TRUE,
+										FALSE);
 		}
 
-		improve_attack_modifier(obj, mon, &b, &s, verb, 
-								TRUE, FALSE);
+		improve_attack_modifier(obj, mon, &b, &s, verb, FALSE, TRUE, FALSE);
 
 		dmg = melee_damage(obj, b, s);
 		dmg = critical_norm(obj->weight, obj->to_h, dmg, &msg_type);
@@ -426,7 +427,7 @@ void py_attack(int y, int x)
 	int blow_energy = 100 * z_info->move_energy / player->state.num_blows;
 	int blows = 0;
 	bool fear = FALSE;
-	monster_type *m_ptr = square_monster(cave, y, x);
+	struct monster *mon = square_monster(cave, y, x);
 	
 	/* disturb the player */
 	disturb(player, 0);
@@ -445,12 +446,12 @@ void py_attack(int y, int x)
 	}
 	
 	/* Hack - delay fear messages */
-	if (fear && mflag_has(m_ptr->mflag, MFLAG_VISIBLE)) {
+	if (fear && mflag_has(mon->mflag, MFLAG_VISIBLE)) {
 		char m_name[80];
 		/* Don't set monster_desc flags, since add_monster_message does string
 		 * processing on m_name */
-		monster_desc(m_name, sizeof(m_name), m_ptr, MDESC_DEFAULT);
-		add_monster_message(m_name, m_ptr, MON_MSG_FLEE_IN_TERROR, TRUE);
+		monster_desc(m_name, sizeof(m_name), mon, MDESC_DEFAULT);
+		add_monster_message(m_name, mon, MON_MSG_FLEE_IN_TERROR, TRUE);
 	}
 }
 
@@ -493,6 +494,7 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 	int tx = x + 99 * ddx[dir];
 
 	bool hit_target = FALSE;
+	bool none_left = FALSE;
 
 	struct object *missile;
 
@@ -523,7 +525,7 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 	path_n = project_path(path_g, range, y, x, ty, tx, 0);
 
 	/* Hack -- Handle stuff */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Start at the player */
 	x = player->px;
@@ -533,7 +535,7 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 	for (i = 0; i < path_n; ++i) {
 		int ny = path_g[i].y;
 		int nx = path_g[i].x;
-		bool see = player_can_see_bold(ny, nx);
+		bool see = square_isseen(cave, ny, nx);
 
 		/* Stop before hitting walls */
 		if (!(square_ispassable(cave, ny, nx)) &&
@@ -549,11 +551,11 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 
 		/* Try the attack on the monster at (x, y) if any */
 		if (cave->squares[y][x].mon > 0) {
-			monster_type *m_ptr = square_monster(cave, y, x);
-			int visible = mflag_has(m_ptr->mflag, MFLAG_VISIBLE);
+			struct monster *mon = square_monster(cave, y, x);
+			int visible = mflag_has(mon->mflag, MFLAG_VISIBLE);
 
 			bool fear = FALSE;
-			const char *note_dies = monster_is_unusual(m_ptr->race) ? 
+			const char *note_dies = monster_is_unusual(mon->race) ? 
 				" is destroyed." : " dies.";
 
 			struct attack_result result = attack(obj, y, x);
@@ -592,7 +594,7 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 						if (OPT(show_damage))
 							dmg_text = format(" (%d)", dmg);
 
-						monster_desc(m_name, sizeof(m_name), m_ptr, MDESC_OBJE);
+						monster_desc(m_name, sizeof(m_name), mon, MDESC_OBJE);
 
 						if (ranged_hit_types[j].text)
 							msgt(msg_type, "Your %s %s %s%s. %s", o_name, 
@@ -604,24 +606,26 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 					}
 					
 					/* Track this monster */
-					if (mflag_has(m_ptr->mflag, MFLAG_VISIBLE)) {
-						monster_race_track(player->upkeep, m_ptr->race);
-						health_track(player->upkeep, m_ptr);
+					if (mflag_has(mon->mflag, MFLAG_VISIBLE)) {
+						monster_race_track(player->upkeep, mon->race);
+						health_track(player->upkeep, mon);
 					}
 				}
 
 				/* Hit the monster, check for death */
-				if (!mon_take_hit(m_ptr, dmg, &fear, note_dies)) {
-					message_pain(m_ptr, dmg);
-					if (fear && mflag_has(m_ptr->mflag, MFLAG_VISIBLE)) {
+				if (!mon_take_hit(mon, dmg, &fear, note_dies)) {
+					message_pain(mon, dmg);
+					if (fear && mflag_has(mon->mflag, MFLAG_VISIBLE)) {
 						char m_name[80];
-						monster_desc(m_name, sizeof(m_name), m_ptr, 
+						monster_desc(m_name, sizeof(m_name), mon, 
 									 MDESC_DEFAULT);
-						add_monster_message(m_name, m_ptr, 
+						add_monster_message(m_name, mon, 
 											MON_MSG_FLEE_IN_TERROR, TRUE);
 					}
 				}
 			}
+			/* Stop the missile */
+			break;
 		}
 
 		/* Stop if non-projectable but passable */
@@ -631,9 +635,9 @@ static void ranged_helper(struct object *obj, int dir, int range, int shots,
 
 	/* Get the missile */
 	if (object_is_carried(player, obj))
-		missile = gear_object_for_use(obj, 1, TRUE);
+		missile = gear_object_for_use(obj, 1, TRUE, &none_left);
 	else
-		missile = floor_object_for_use(obj, 1, TRUE);
+		missile = floor_object_for_use(obj, 1, TRUE, &none_left);
 
 	/* Drop (or break) near that location */
 	drop_near(cave, missile, breakage_chance(missile, hit_target), y, x, TRUE);
@@ -662,8 +666,10 @@ static struct attack_result make_ranged_shot(struct object *ammo, int y, int x)
 
 	result.success = TRUE;
 
-	improve_attack_modifier(ammo, mon, &b, &s, result.hit_verb, TRUE, FALSE);
-	improve_attack_modifier(bow, mon, &b, &s, result.hit_verb, TRUE, FALSE);
+	improve_attack_modifier(ammo, mon, &b, &s, result.hit_verb, TRUE, TRUE,
+							FALSE);
+	improve_attack_modifier(bow, mon, &b, &s, result.hit_verb, TRUE, TRUE,
+							FALSE);
 
 	result.dmg = ranged_damage(ammo, bow, b, s, multiplier);
 	result.dmg = critical_shot(ammo->weight, ammo->to_h, result.dmg,
@@ -696,7 +702,8 @@ static struct attack_result make_ranged_throw(struct object *obj, int y, int x)
 
 	result.success = TRUE;
 
-	improve_attack_modifier(obj, mon, &b, &s, result.hit_verb, TRUE, FALSE);
+	improve_attack_modifier(obj, mon, &b, &s, result.hit_verb, TRUE, TRUE,
+							FALSE);
 
 	result.dmg = ranged_damage(obj, NULL, b, s, multiplier);
 	result.dmg = critical_norm(obj->weight, obj->to_h, result.dmg,
@@ -734,7 +741,7 @@ void do_cmd_fire(struct command *cmd) {
 		return;
 
 	/* Require a usable launcher */
-	if (!bow->tval || !player->state.ammo_tval) {
+	if (!bow || !player->state.ammo_tval) {
 		msg("You have nothing to fire with.");
 		return;
 	}
@@ -773,7 +780,8 @@ void do_cmd_throw(struct command *cmd) {
 			/* Prompt */ "Throw which item?",
 			/* Error  */ "You have nothing to throw.",
 			/* Filter */ NULL,
-			/* Choice */ USE_QUIVER | USE_INVEN | USE_FLOOR) != CMD_OK)
+			/* Choice */ USE_QUIVER | USE_INVEN | USE_FLOOR | QUIVER_TAGS)
+		!= CMD_OK)
 		return;
 
 	if (cmd_get_target(cmd, "target", &dir) == CMD_OK)
@@ -803,7 +811,7 @@ void do_cmd_fire_at_nearest(void) {
 	struct object *bow = equipped_item_by_slot_name(player, "shooting");
 
 	/* Require a usable launcher */
-	if (!bow->tval || !player->state.ammo_tval) {
+	if (!bow || !player->state.ammo_tval) {
 		msg("You have nothing to fire with.");
 		return;
 	}

@@ -36,6 +36,7 @@
 #include "obj-slays.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-spell.h"
 #include "player-util.h"
@@ -200,13 +201,11 @@ struct object *object_new(void)
 }
 
 /**
- * Delete an object and free its memory
- *
- * Note that the pointer obj is *not* set to NULL by this function, so
- * it should *not* be used as an object again without being re-assigned
+ * Delete an object and free its memory, and set its pointer to NULL
  */
-void object_delete(struct object *obj)
+void object_delete(struct object **obj_address)
 {
+	struct object *obj = *obj_address;
 	struct object *prev = obj->prev;
 	struct object *next = obj->next;
 
@@ -228,7 +227,12 @@ void object_delete(struct object *obj)
 		prev->next = NULL;
 	}
 
+	/* If we're tracking the object, stop */
+	if (player && player->upkeep && obj == player->upkeep->object)
+		player->upkeep->object = NULL;
+
 	mem_free(obj);
+	*obj_address = NULL;
 }
 
 /**
@@ -240,7 +244,7 @@ void object_pile_free(struct object *obj)
 
 	while (current) {
 		next = current->next;
-		object_delete(current);
+		object_delete(&current);
 		current = next;
 	}
 }
@@ -261,89 +265,99 @@ void object_pile_free(struct object *obj)
  * Chests, and activatable items, except rods, never stack (for various
  * reasons).
  */
-bool object_stackable(const struct object *o_ptr, const struct object *j_ptr,
+bool object_stackable(const struct object *obj1, const struct object *obj2,
 					  object_stack_t mode)
 {
 	int i;
 
 	/* Equipment items don't stack */
-	if (object_is_equipped(player->body, o_ptr))
+	if (object_is_equipped(player->body, obj1))
 		return FALSE;
-	if (object_is_equipped(player->body, j_ptr))
+	if (object_is_equipped(player->body, obj2))
 		return FALSE;
 
 	/* If either item is unknown, do not stack */
-	if (mode & OSTACK_LIST && o_ptr->marked == MARK_AWARE) return FALSE;
-	if (mode & OSTACK_LIST && j_ptr->marked == MARK_AWARE) return FALSE;
+	if (mode & OSTACK_LIST && obj1->marked == MARK_AWARE) return FALSE;
+	if (mode & OSTACK_LIST && obj2->marked == MARK_AWARE) return FALSE;
 
 	/* Hack -- identical items cannot be stacked */
-	if (o_ptr == j_ptr) return FALSE;
+	if (obj1 == obj2) return FALSE;
 
 	/* Require identical object kinds */
-	if (o_ptr->kind != j_ptr->kind) return FALSE;
+	if (obj1->kind != obj2->kind) return FALSE;
 
 	/* Different flags don't stack */
-	if (!of_is_equal(o_ptr->flags, j_ptr->flags)) return FALSE;
+	if (!of_is_equal(obj1->flags, obj2->flags)) return FALSE;
+
+	/* Different elements don't stack */
+	for (i = 0; i < ELEM_MAX; i++) {
+		if (obj1->el_info[i].res_level != obj2->el_info[i].res_level)
+			return FALSE;
+		if ((obj1->el_info[i].flags & (EL_INFO_HATES | EL_INFO_IGNORE)) !=
+			(obj2->el_info[i].flags & (EL_INFO_HATES | EL_INFO_IGNORE)))
+			return FALSE;
+	}
 
 	/* Artifacts never stack */
-	if (o_ptr->artifact || j_ptr->artifact) return FALSE;
+	if (obj1->artifact || obj2->artifact) return FALSE;
 
 	/* Analyze the items */
-	if (tval_is_chest(o_ptr)) {
+	if (tval_is_chest(obj1)) {
 		/* Chests never stack */
 		return FALSE;
 	}
-	else if (tval_is_food(o_ptr) || tval_is_potion(o_ptr) ||
-		tval_is_scroll(o_ptr) || tval_is_rod(o_ptr)) {
+	else if (tval_is_edible(obj1) || tval_is_potion(obj1) ||
+		tval_is_scroll(obj1) || tval_is_rod(obj1)) {
 		/* Food, potions, scrolls and rods all stack nicely,
 		   since the kinds are identical, either both will be
 		   aware or both will be unaware */
-	} else if (tval_can_have_charges(o_ptr) || tval_is_money(o_ptr)) {
+	} else if (tval_can_have_charges(obj1) || tval_is_money(obj1)) {
 		/* Gold, staves and wands stack most of the time */
 		/* Too much gold or too many charges */
-		if (o_ptr->pval + j_ptr->pval > MAX_PVAL)
+		if (obj1->pval + obj2->pval > MAX_PVAL)
 			return FALSE;
 
 		/* ... otherwise ok */
-	} else if (tval_is_weapon(o_ptr) || tval_is_armor(o_ptr) ||
-		tval_is_jewelry(o_ptr) || tval_is_light(o_ptr)) {
-		bool o_is_known = object_is_known(o_ptr);
-		bool j_is_known = object_is_known(j_ptr);
+	} else if (tval_is_weapon(obj1) || tval_is_armor(obj1) ||
+		tval_is_jewelry(obj1) || tval_is_light(obj1)) {
+		bool obj1_is_known = object_is_known(obj1);
+		bool obj2_is_known = object_is_known(obj2);
 
 		/* Require identical values */
-		if (o_ptr->ac != j_ptr->ac) return FALSE;
-		if (o_ptr->dd != j_ptr->dd) return FALSE;
-		if (o_ptr->ds != j_ptr->ds) return FALSE;
+		if (obj1->ac != obj2->ac) return FALSE;
+		if (obj1->dd != obj2->dd) return FALSE;
+		if (obj1->ds != obj2->ds) return FALSE;
 
 		/* Require identical bonuses */
-		if (o_ptr->to_h != j_ptr->to_h) return FALSE;
-		if (o_ptr->to_d != j_ptr->to_d) return FALSE;
-		if (o_ptr->to_a != j_ptr->to_a) return FALSE;
+		if (obj1->to_h != obj2->to_h) return FALSE;
+		if (obj1->to_d != obj2->to_d) return FALSE;
+		if (obj1->to_a != obj2->to_a) return FALSE;
 
 		/* Require all identical modifiers */
 		for (i = 0; i < OBJ_MOD_MAX; i++)
-			if (o_ptr->modifiers[i] != j_ptr->modifiers[i])
+			if (obj1->modifiers[i] != obj2->modifiers[i])
 				return (FALSE);
 
 		/* Require identical ego-item types */
-		if (o_ptr->ego != j_ptr->ego) return FALSE;
+		if (obj1->ego != obj2->ego) return FALSE;
 
 		/* Hack - Never stack recharging wearables ... */
-		if ((o_ptr->timeout || j_ptr->timeout) &&
-			!tval_is_light(o_ptr)) return FALSE;
+		if ((obj1->timeout || obj2->timeout) &&
+			!tval_is_light(obj1)) return FALSE;
 
 		/* ... and lights must have same amount of fuel */
-		else if ((o_ptr->timeout != j_ptr->timeout) &&
-				 tval_is_light(o_ptr)) return FALSE;
+		else if ((obj1->timeout != obj2->timeout) &&
+				 tval_is_light(obj1)) return FALSE;
 
 		/* Prevent unIDd items stacking with IDd items in the object list */
-		if (mode & OSTACK_LIST && (o_is_known != j_is_known)) return FALSE;
+		if (mode & OSTACK_LIST && (obj1_is_known != obj2_is_known))
+			return FALSE;
 	} else {
 		/* Anything else probably okay */
 	}
 
 	/* Require compatible inscriptions */
-	if (o_ptr->note && j_ptr->note && (o_ptr->note != j_ptr->note))
+	if (obj1->note && obj2->note && (obj1->note != obj2->note))
 		return FALSE;
 
 	/* They must be similar enough */
@@ -353,16 +367,16 @@ bool object_stackable(const struct object *o_ptr, const struct object *j_ptr,
 /**
  * Return whether each stack of objects can be merged into one stack.
  */
-bool object_similar(const struct object *o_ptr, const struct object *j_ptr,
+bool object_similar(const struct object *obj1, const struct object *obj2,
 					object_stack_t mode)
 {
-	int total = o_ptr->number + j_ptr->number;
+	int total = obj1->number + obj2->number;
 
 	/* Check against stacking limit - except in stores which absorb anyway */
 	if (!(mode & OSTACK_STORE) && (total > z_info->stack_size))
 		return FALSE;
 
-	return object_stackable(o_ptr, j_ptr, mode);
+	return object_stackable(obj1, obj2, mode);
 }
 
 /**
@@ -375,59 +389,60 @@ bool object_similar(const struct object *o_ptr, const struct object *j_ptr,
  *
 * These assumptions are enforced by the "object_similar()" code.
  */
-static void object_absorb_merge(struct object *o_ptr, const struct object *j_ptr)
+static void object_absorb_merge(struct object *obj1, const struct object *obj2)
 {
 	int total;
 
 	/* Blend all knowledge */
-	of_union(o_ptr->known_flags, j_ptr->known_flags);
+	of_union(obj1->known_flags, obj2->known_flags);
+	of_union(obj1->id_flags, obj2->id_flags);
 
 	/* Merge inscriptions */
-	if (j_ptr->note)
-		o_ptr->note = j_ptr->note;
+	if (obj2->note)
+		obj1->note = obj2->note;
 
 	/* Combine timeouts for rod stacking */
-	if (tval_can_have_timeout(o_ptr))
-		o_ptr->timeout += j_ptr->timeout;
+	if (tval_can_have_timeout(obj1))
+		obj1->timeout += obj2->timeout;
 
 	/* Combine pvals for wands and staves */
-	if (tval_can_have_charges(o_ptr) || tval_is_money(o_ptr)) {
-		total = o_ptr->pval + j_ptr->pval;
-		o_ptr->pval = total >= MAX_PVAL ? MAX_PVAL : total;
+	if (tval_can_have_charges(obj1) || tval_is_money(obj1)) {
+		total = obj1->pval + obj2->pval;
+		obj1->pval = total >= MAX_PVAL ? MAX_PVAL : total;
 	}
 
 	/* Combine origin data as best we can */
-	if (o_ptr->origin != j_ptr->origin ||
-		o_ptr->origin_depth != j_ptr->origin_depth ||
-		o_ptr->origin_xtra != j_ptr->origin_xtra) {
+	if (obj1->origin != obj2->origin ||
+		obj1->origin_depth != obj2->origin_depth ||
+		obj1->origin_xtra != obj2->origin_xtra) {
 		int act = 2;
 
-		if (o_ptr->origin_xtra && j_ptr->origin_xtra) {
-			monster_race *r_ptr = &r_info[o_ptr->origin_xtra];
-			monster_race *s_ptr = &r_info[j_ptr->origin_xtra];
+		if (obj1->origin_xtra && obj2->origin_xtra) {
+			struct monster_race *race1 = &r_info[obj1->origin_xtra];
+			struct monster_race *race2 = &r_info[obj2->origin_xtra];
 
-			bool r_uniq = rf_has(r_ptr->flags, RF_UNIQUE) ? TRUE : FALSE;
-			bool s_uniq = rf_has(s_ptr->flags, RF_UNIQUE) ? TRUE : FALSE;
+			bool r1_uniq = rf_has(race1->flags, RF_UNIQUE) ? TRUE : FALSE;
+			bool r2_uniq = rf_has(race2->flags, RF_UNIQUE) ? TRUE : FALSE;
 
-			if (r_uniq && !s_uniq) act = 0;
-			else if (s_uniq && !r_uniq) act = 1;
+			if (r1_uniq && !r2_uniq) act = 0;
+			else if (r2_uniq && !r1_uniq) act = 1;
 			else act = 2;
 		}
 
 		switch (act)
 		{
-				/* Overwrite with j_ptr */
+				/* Overwrite with obj2 */
 			case 1:
 			{
-				o_ptr->origin = j_ptr->origin;
-				o_ptr->origin_depth = j_ptr->origin_depth;
-				o_ptr->origin_xtra = j_ptr->origin_xtra;
+				obj1->origin = obj2->origin;
+				obj1->origin_depth = obj2->origin_depth;
+				obj1->origin_xtra = obj2->origin_xtra;
 			}
 
 				/* Set as "mixed" */
 			case 2:
 			{
-				o_ptr->origin = ORIGIN_MIXED;
+				obj1->origin = ORIGIN_MIXED;
 			}
 		}
 	}
@@ -436,29 +451,29 @@ static void object_absorb_merge(struct object *o_ptr, const struct object *j_ptr
 /**
  * Merge a smaller stack into a larger stack, leaving two uneven stacks.
  */
-void object_absorb_partial(struct object *o_ptr, struct object *j_ptr)
+void object_absorb_partial(struct object *obj1, struct object *obj2)
 {
-	int smallest = MIN(o_ptr->number, j_ptr->number);
-	int largest = MAX(o_ptr->number, j_ptr->number);
+	int smallest = MIN(obj1->number, obj2->number);
+	int largest = MAX(obj1->number, obj2->number);
 	int difference = (z_info->stack_size) - largest;
-	o_ptr->number = largest + difference;
-	j_ptr->number = smallest - difference;
+	obj1->number = largest + difference;
+	obj2->number = smallest - difference;
 
-	object_absorb_merge(o_ptr, j_ptr);
+	object_absorb_merge(obj1, obj2);
 }
 
 /**
  * Merge two stacks into one stack.
  */
-void object_absorb(struct object *o_ptr, struct object *j_ptr)
+void object_absorb(struct object *obj1, struct object *obj2)
 {
-	int total = o_ptr->number + j_ptr->number;
+	int total = obj1->number + obj2->number;
 
 	/* Add together the item counts */
-	o_ptr->number = (total < z_info->stack_size ? total : z_info->stack_size);
+	obj1->number = (total < z_info->stack_size ? total : z_info->stack_size);
 
-	object_absorb_merge(o_ptr, j_ptr);
-	object_delete(j_ptr);
+	object_absorb_merge(obj1, obj2);
+	object_delete(&obj2);
 }
 
 /**
@@ -531,6 +546,8 @@ void object_copy_amt(struct object *dest, struct object *src, int amt)
  *
  * Where object_copy_amt() makes `amt` new objects, this function leaves the
  * total number unchanged; otherwise the two functions are similar.
+ *
+ * This function should only be used when amt < src->number
  */
 struct object *object_split(struct object *src, int amt)
 {
@@ -540,8 +557,7 @@ struct object *object_split(struct object *src, int amt)
 	object_copy(dest, src);
 
 	/* Check legality */
-	if (src->number < amt)
-		amt = src->number;
+	assert(src->number > amt);
 
 	/* Distribute charges of wands, staves, or rods */
 	distribute_charges(src, dest, amt);
@@ -561,7 +577,8 @@ struct object *object_split(struct object *src, int amt)
  *
  * Optionally describe what remains.
  */
-struct object *floor_object_for_use(struct object *obj, int num, bool message)
+struct object *floor_object_for_use(struct object *obj, int num, bool message,
+									bool *none_left)
 {
 	struct object *usable;
 	char name[80];
@@ -574,18 +591,32 @@ struct object *floor_object_for_use(struct object *obj, int num, bool message)
 		usable = object_split(obj, num);
 	} else {
 		usable = obj;
-		square_excise_object(cave, player->py, player->px, usable);
+		square_excise_object(cave, usable->iy, usable->ix, usable);
+		*none_left = TRUE;
+
+		/* Stop tracking item */
+		if (tracked_object_is(player->upkeep, obj))
+			track_object(player->upkeep, NULL);
+
+		/* Inventory has changed, so disable repeat command */ 
+		cmd_disable_repeat();
 	}
 
 	/* Housekeeping */
-	player->upkeep->update |= (PU_BONUS | PU_MANA | PU_INVEN);
+	player->upkeep->update |= (PU_BONUS | PU_INVEN);
 	player->upkeep->notice |= (PN_COMBINE);
 	player->upkeep->redraw |= (PR_INVEN | PR_EQUIP);
 
 	/* Print a message if requested and there is anything left */
-	if (message && (usable != obj)) {
+	if (message) {
+		if (usable == obj)
+			obj->number--;
+
 		/* Get a description */
 		object_desc(name, sizeof(name), obj, ODESC_PREFIX | ODESC_FULL);
+
+		if (usable == obj)
+			obj->number++;
 
 		/* Print a message */
 		msg("You see %s.", name);
@@ -635,17 +666,14 @@ bool floor_carry(struct chunk *c, int y, int x, struct object *drop, bool last)
 		n++;
 	}
 
-	/* Option -- disallow stacking */
-	if (OPT(birth_no_stacking) && n) return (0);
-
 	/* The stack is already too large */
-	if (n >= z_info->floor_size) {
+	if (n >= z_info->floor_size || (OPT(birth_no_stacking) && n)) {
 		/* Delete the oldest ignored object */
 		struct object *ignore = floor_get_oldest_ignored(y, x);
 
 		if (ignore) {
 			square_excise_object(c, y, x, ignore);
-			object_delete(ignore);
+			object_delete(&ignore);
 		} else
 			return FALSE;
 	}
@@ -690,8 +718,8 @@ bool floor_carry(struct chunk *c, int y, int x, struct object *drop, bool last)
  *
  * Objects which fail to be carried by the floor are deleted.
  */
-void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
-			   bool verbose)
+void drop_near(struct chunk *c, struct object *dropped, int chance, int y,
+			   int x, bool verbose)
 {
 	int i, k, n, d, s;
 
@@ -700,20 +728,21 @@ void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
 	int dy, dx;
 	int ty, tx;
 
-	struct object *o_ptr;
+	struct object *obj;
 
 	char o_name[80];
 
 	bool flag = FALSE;
+	bool ignorable = ignore_item_ok(dropped);
 
 	/* Describe object */
-	object_desc(o_name, sizeof(o_name), j_ptr, ODESC_BASE);
+	object_desc(o_name, sizeof(o_name), dropped, ODESC_BASE);
 
 	/* Handle normal "breakage" */
-	if (!j_ptr->artifact && (randint0(100) < chance)) {
+	if (!dropped->artifact && (randint0(100) < chance)) {
 		/* Message */
 		msg("The %s %s.", o_name,
-			VERB_AGREEMENT(j_ptr->number, "breaks", "break"));
+			VERB_AGREEMENT(dropped->number, "breaks", "break"));
 
 		/* Failure */
 		return;
@@ -753,18 +782,23 @@ void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
 			/* Require floor space */
 			if (!square_isfloor(cave, ty, tx)) continue;
 
+			/* Require no trap or rune */
+			if (square_isplayertrap(cave, ty, tx) ||
+				square_iswarded(cave, ty, tx))
+				continue;
+
 			/* No objects */
 			k = 0;
 			n = 0;
 
 			/* Scan objects in that grid */
-			for (o_ptr = square_object(c, ty, tx); o_ptr; o_ptr = o_ptr->next) {
+			for (obj = square_object(c, ty, tx); obj; obj = obj->next) {
 				/* Check for possible combination */
-				if (object_similar(o_ptr, j_ptr, OSTACK_FLOOR))
+				if (object_similar(obj, dropped, OSTACK_FLOOR))
 					comb = TRUE;
 
 				/* Count objects */
-				if (!ignore_item_ok(o_ptr))
+				if (!ignore_item_ok(obj))
 					k++;
 				else
 					n++;
@@ -805,10 +839,10 @@ void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
 	}
 
 	/* Handle lack of space */
-	if (!flag && !j_ptr->artifact) {
+	if (!flag && !dropped->artifact) {
 		/* Message */
 		msg("The %s %s.", o_name,
-			VERB_AGREEMENT(j_ptr->number, "disappears", "disappear"));
+			VERB_AGREEMENT(dropped->number, "disappears", "disappear"));
 
 		/* Debug */
 		if (player->wizard) msg("Breakage (no floor space).");
@@ -841,15 +875,15 @@ void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
 	}
 
 	/* Give it to the floor */
-	if (!floor_carry(c, by, bx, j_ptr, FALSE)) {
+	if (!floor_carry(c, by, bx, dropped, FALSE)) {
 		/* Message */
 		msg("The %s %s.", o_name,
-			VERB_AGREEMENT(j_ptr->number, "disappears", "disappear"));
+			VERB_AGREEMENT(dropped->number, "disappears", "disappear"));
 
 		/* Debug */
 		if (player->wizard) msg("Breakage (too many objects).");
 
-		if (j_ptr->artifact) j_ptr->artifact->created = FALSE;
+		if (dropped->artifact) dropped->artifact->created = FALSE;
 
 		/* Failure */
 		return;
@@ -859,7 +893,7 @@ void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
 	sound(MSG_DROP);
 
 	/* Message when an object falls under the player */
-	if (verbose && (cave->squares[by][bx].mon < 0) && !ignore_item_ok(j_ptr))
+	if (verbose && (cave->squares[by][bx].mon < 0) && !ignorable)
 		msg("You feel something roll beneath your feet.");
 }
 
@@ -879,6 +913,8 @@ void push_object(int y, int x)
 
 	struct queue *queue = q_new(z_info->floor_size);
 
+	bool glyph = square_iswarded(cave, y, x);
+
 	/* Push all objects on the square, stripped of pile info, into the queue */
 	while (obj) {
 		struct object *next = obj->next;
@@ -891,6 +927,9 @@ void push_object(int y, int x)
 		/* Next object */
 		obj = next;
 	}
+
+	/* Disassociate the objects from the square */
+	cave->squares[y][x].obj = NULL;
 
 	/* Set feature to an open door */
 	square_force_floor(cave, y, x);
@@ -905,8 +944,10 @@ void push_object(int y, int x)
 		drop_near(cave, obj, 0, y, x, FALSE);
 	}
 
-	/* Reset cave feature */
+	/* Reset cave feature and rune if needed */
 	square_set_feat(cave, y, x, feat_old->fidx);
+	if (glyph)
+		square_add_ward(cave, y, x);
 
 	q_free(queue);
 }

@@ -23,6 +23,7 @@
 #include "obj-ignore.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "trap.h"
 
@@ -73,9 +74,9 @@
  * may turn into different objects, monsters into different monsters, and
  * terrain may be objects, monsters, or stay the same.
  */
-void map_info(unsigned y, unsigned x, grid_data *g)
+void map_info(unsigned y, unsigned x, struct grid_data *g)
 {
-	object_type *obj;
+	struct object *obj;
 
 	assert(x < (unsigned) cave->width);
 	assert(y < (unsigned) cave->height);
@@ -125,7 +126,8 @@ void map_info(unsigned y, unsigned x, grid_data *g)
 
 		/* Scan the square trap list */
 		while (trap) {
-			if (trf_has(trap->flags, TRF_TRAP)) {
+			if (trf_has(trap->flags, TRF_TRAP) ||
+				trf_has(trap->flags, TRF_RUNE)) {
 				/* Accept the trap */
 				g->trap = trap;
 				break;
@@ -158,8 +160,8 @@ void map_info(unsigned y, unsigned x, grid_data *g)
 	/* Monsters */
 	if (g->m_idx > 0) {
 		/* If the monster isn't "visible", make sure we don't list it.*/
-		monster_type *m_ptr = cave_monster(cave, g->m_idx);
-		if (!mflag_has(m_ptr->mflag, MFLAG_VISIBLE)) g->m_idx = 0;
+		struct monster *mon = cave_monster(cave, g->m_idx);
+		if (!mflag_has(mon->mflag, MFLAG_VISIBLE)) g->m_idx = 0;
 	}
 
 	/* Rare random hallucination on non-outer walls */
@@ -173,7 +175,7 @@ void map_info(unsigned y, unsigned x, grid_data *g)
 			g->hallucinate = FALSE;
 	}
 
-	assert((int) g->f_idx <= FEAT_PERM);
+	assert((int) g->f_idx <= FEAT_PASS_RUBBLE);
 	if (!g->hallucinate)
 		assert((int)g->m_idx < cave->mon_max);
 	/* All other g fields are 'flags', mostly booleans. */
@@ -211,7 +213,7 @@ void map_info(unsigned y, unsigned x, grid_data *g)
  */
 void square_note_spot(struct chunk *c, int y, int x)
 {
-	object_type *obj;
+	struct object *obj;
 
 	/* Require "seen" flag */
 	if (!square_isseen(c, y, x))
@@ -274,7 +276,7 @@ static void cave_light(struct point_set *ps)
 	player->upkeep->update |= (PU_FORGET_VIEW | PU_UPDATE_VIEW | PU_MONSTERS);
 
 	/* Update stuff */
-	update_stuff(player->upkeep);
+	update_stuff(player);
 
 	/* Process the grids */
 	for (i = 0; i < ps->n; i++)
@@ -290,19 +292,19 @@ static void cave_light(struct point_set *ps)
 		{
 			int chance = 25;
 
-			monster_type *m_ptr = square_monster(cave, y, x);
+			struct monster *mon = square_monster(cave, y, x);
 
 			/* Stupid monsters rarely wake up */
-			if (rf_has(m_ptr->race->flags, RF_STUPID)) chance = 10;
+			if (rf_has(mon->race->flags, RF_STUPID)) chance = 10;
 
 			/* Smart monsters always wake up */
-			if (rf_has(m_ptr->race->flags, RF_SMART)) chance = 100;
+			if (rf_has(mon->race->flags, RF_SMART)) chance = 100;
 
 			/* Sometimes monsters wake up */
-			if (m_ptr->m_timed[MON_TMD_SLEEP] && (randint0(100) < chance))
+			if (mon->m_timed[MON_TMD_SLEEP] && (randint0(100) < chance))
 			{
 				/* Wake up! */
-				mon_clear_timed(m_ptr, MON_TMD_SLEEP,
+				mon_clear_timed(mon, MON_TMD_SLEEP,
 					MON_TMD_FLG_NOTIFY, FALSE);
 
 			}
@@ -333,7 +335,7 @@ static void cave_unlight(struct point_set *ps)
 		sqinfo_off(cave->squares[y][x].info, SQUARE_GLOW);
 
 		/* Hack -- Forget "boring" grids */
-		if (!square_isinteresting(cave, y, x))
+		if (square_isfloor(cave, y, x))
 			sqinfo_off(cave->squares[y][x].info, SQUARE_MARK);
 	}
 
@@ -341,7 +343,7 @@ static void cave_unlight(struct point_set *ps)
 	player->upkeep->update |= (PU_FORGET_VIEW | PU_UPDATE_VIEW | PU_MONSTERS);
 
 	/* Update stuff */
-	update_stuff(player->upkeep);
+	update_stuff(player);
 
 	/* Process the grids */
 	for (i = 0; i < ps->n; i++)
@@ -360,6 +362,9 @@ static void cave_unlight(struct point_set *ps)
 static void cave_room_aux(struct point_set *seen, int y, int x)
 {
 	if (point_set_contains(seen, y, x))
+		return;
+
+	if (!square_in_bounds(cave, y, x))
 		return;
 
 	if (!square_isroom(cave, y, x))
@@ -516,14 +521,31 @@ void cave_illuminate(struct chunk *c, bool daytime)
 	/* Apply light or darkness */
 	for (y = 0; y < c->height; y++)
 		for (x = 0; x < c->width; x++) {
-			feature_type *f_ptr = &f_info[c->squares[y][x].feat];
+			int d;
+			bool light = FALSE;
+			struct feature *feat = &f_info[c->squares[y][x].feat];
 			
+			/* Skip grids with no surrounding floors or stairs */
+			for (d = 0; d < 9; d++) {
+				/* Extract adjacent (legal) location */
+				int yy = y + ddy_ddd[d];
+				int xx = x + ddx_ddd[d];
+
+				/* Paranoia */
+				if (!square_in_bounds_fully(c, yy, xx)) continue;
+
+				/* Test */
+				if (square_isfloor(c, yy, xx) || square_isstairs(c, yy, xx))
+					light = TRUE;
+			}
+
+			if (!light) continue;
+
 			/* Only interesting grids at night */
-			if (daytime || !tf_has(f_ptr->flags, TF_FLOOR)) {
+			if (daytime || !tf_has(feat->flags, TF_FLOOR)) {
 				sqinfo_on(c->squares[y][x].info, SQUARE_GLOW);
 				sqinfo_on(c->squares[y][x].info, SQUARE_MARK);
-			}
-			else {
+			} else {
 				sqinfo_off(c->squares[y][x].info, SQUARE_GLOW);
 				sqinfo_off(c->squares[y][x].info, SQUARE_MARK);
 			}

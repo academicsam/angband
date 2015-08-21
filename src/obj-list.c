@@ -25,6 +25,7 @@
 #include "obj-pile.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "project.h"
 
 /**
  * Allocate a new object list.
@@ -122,8 +123,9 @@ void object_list_reset(object_list_t *list)
 		return;
 
 	memset(list->entries, 0, list->entries_size * sizeof(object_list_entry_t));
-	list->total_entries = 0;
-	list->total_objects = 0;
+	memset(&list->total_entries, 0, OBJECT_LIST_SECTION_MAX * sizeof(u16b));
+	memset(&list->total_objects, 0, OBJECT_LIST_SECTION_MAX * sizeof(u16b));
+	list->distinct_entries = 0;
 	list->creation_turn = 0;
 	list->sorted = FALSE;
 }
@@ -131,7 +133,7 @@ void object_list_reset(object_list_t *list)
 /**
  * Return TRUE if the object should be omitted from the object list.
  */
-static bool object_list_should_ignore_object(const object_type *object)
+static bool object_list_should_ignore_object(const struct object *object)
 {
 	assert(object->kind);
 
@@ -153,6 +155,8 @@ static bool object_list_should_ignore_object(const object_type *object)
 void object_list_collect(object_list_t *list)
 {
 	int i, y, x;
+	int py = player->py;
+	int px = player->px;
 
 	if (list == NULL || list->entries == NULL)
 		return;
@@ -163,6 +167,10 @@ void object_list_collect(object_list_t *list)
 	/* Scan each object in the dungeon. */
 	for (y = 1; y < cave->height; y++) {
 		for (x = 1; x < cave->width; x++) {
+			bool los = projectable(cave, py, px, y, x, PROJECT_NONE) || 
+				((y == py) && (x == px));
+			int field = (los) ? OBJECT_LIST_SECTION_LOS :
+				OBJECT_LIST_SECTION_NO_LOS;
 			struct object *obj = square_object(cave, y, x);
 			for (obj = square_object(cave, y, x); obj; obj = obj->next) {
 				object_list_entry_t *entry = NULL;
@@ -176,10 +184,13 @@ void object_list_collect(object_list_t *list)
 				/* Find or add a list entry. */
 				for (entry_index = 0; entry_index < (int)list->entries_size;
 					 entry_index++) {
+					int j;
+
 					if (list->entries[entry_index].object == NULL) {
 						/* We found an empty slot, so add this object here. */
 						list->entries[entry_index].object = obj;
-						list->entries[entry_index].count = 0;
+						for (j = 0; j < OBJECT_LIST_SECTION_MAX; j++)
+							list->entries[entry_index].count[j] = 0;
 						list->entries[entry_index].dy = y - player->py;
 						list->entries[entry_index].dx = x - player->px;
 						entry = &list->entries[entry_index];
@@ -196,9 +207,9 @@ void object_list_collect(object_list_t *list)
 
 				/* We only know the number of objects we've actually seen */
 				if (obj->marked == MARK_SEEN)
-					entry->count += obj->number;
+					entry->count[field] += obj->number;
 				else
-					entry->count = 1;
+					entry->count[field] = 1;
 
 				/* Store the distance to the object in the stack that is
 				 * closest to the player. */
@@ -219,10 +230,17 @@ void object_list_collect(object_list_t *list)
 		if (list->entries[i].object == NULL)
 			continue;
 
-		if (list->entries[i].count > 0)
-			list->total_entries++;
-		
-		list->total_objects += list->entries[i].count;
+		if (list->entries[i].count[OBJECT_LIST_SECTION_LOS] > 0)
+			list->total_entries[OBJECT_LIST_SECTION_LOS]++;
+
+		if (list->entries[i].count[OBJECT_LIST_SECTION_NO_LOS] > 0)
+			list->total_entries[OBJECT_LIST_SECTION_NO_LOS]++;
+
+		list->total_objects[OBJECT_LIST_SECTION_LOS] +=
+			list->entries[i].count[OBJECT_LIST_SECTION_LOS];
+		list->total_objects[OBJECT_LIST_SECTION_NO_LOS] +=
+			list->entries[i].count[OBJECT_LIST_SECTION_NO_LOS];
+		list->distinct_entries++;
 	}
 
 	list->creation_turn = turn;
@@ -253,8 +271,8 @@ static int object_list_distance_compare(const void *a, const void *b)
 int object_list_standard_compare(const void *a, const void *b)
 {
 	int result;
-	const object_type *ao = ((object_list_entry_t *)a)->object;
-	const object_type *bo = ((object_list_entry_t *)b)->object;
+	const struct object *ao = ((object_list_entry_t *)a)->object;
+	const struct object *bo = ((object_list_entry_t *)b)->object;
 
 	/* If this happens, something might be wrong in the collect function. */
 	if (ao == NULL || bo == NULL)
@@ -283,7 +301,7 @@ void object_list_sort(object_list_t *list,
 	if (list->sorted)
 		return;
 
-	elements = list->total_entries;
+	elements = list->distinct_entries;
 
 	if (elements <= 1)
 		return;
@@ -335,18 +353,21 @@ byte object_list_entry_line_attribute(const object_list_entry_t *entry)
  * \param entry is the object list entry that has a name to be formatted.
  * \param line_buffer is the buffer to format into.
  * \param size is the size of line_buffer.
- * \param full_width is the maximum formatted width allowed.
  */
 void object_list_format_name(const object_list_entry_t *entry,
-							 char *line_buffer, size_t size,
-							 size_t full_width)
+							 char *line_buffer, size_t size)
 {
 	char name[80];
 	const char *chunk;
 	char *source;
-	size_t name_width = MIN(full_width, size);
 	bool has_singular_prefix;
+	bool los = FALSE;
+	int field;
 	byte old_number;
+	int py = player->py;
+	int px = player->px;
+	int iy = entry->object->iy;
+	int ix = entry->object->ix;
 
 	if (entry == NULL || entry->object == NULL || entry->object->kind == NULL)
 		return;
@@ -373,6 +394,11 @@ void object_list_format_name(const object_list_entry_t *entry,
 	if (entry->object->marked == MARK_AWARE)
 		has_singular_prefix = TRUE;
 
+	/* Work out if the object is in view */
+	los = projectable(cave, py, px, iy, ix, PROJECT_NONE) || 
+		((iy == py) && (ix == px));
+	field = los ? OBJECT_LIST_SECTION_LOS : OBJECT_LIST_SECTION_NO_LOS;
+
 	/*
 	 * Because each entry points to a specific object and not something more
 	 * general, the number of similar objects we counted has to be swapped in.
@@ -380,13 +406,13 @@ void object_list_format_name(const object_list_entry_t *entry,
 	 * object_desc is more flexible.
 	 */
 	old_number = entry->object->number;
-	entry->object->number = entry->count;
+	entry->object->number = entry->count[field];
 	object_desc(name, sizeof(name), entry->object, ODESC_PREFIX | ODESC_FULL);
 	entry->object->number = old_number;
 
 	/* The source string for strtok() needs to be set properly, depending on
 	 * when we use it. */
-	if (!has_singular_prefix && entry->count == 1) {
+	if (!has_singular_prefix && entry->count[field] == 1) {
 		chunk = " ";
 		source = name;
 	}
@@ -400,6 +426,6 @@ void object_list_format_name(const object_list_entry_t *entry,
 
 	/* Get the rest of the name and clip it to fit the max width. */
 	chunk = strtok(source, "\0");
-	my_strcat(line_buffer, chunk, name_width + 1);
+	my_strcat(line_buffer, chunk, size);
 }
 

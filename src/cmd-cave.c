@@ -34,6 +34,7 @@
 #include "obj-ignore.h"
 #include "obj-util.h"
 #include "player-attack.h"
+#include "player-calcs.h"
 #include "player-path.h"
 #include "player-timed.h"
 #include "player-util.h"
@@ -308,6 +309,8 @@ static bool do_cmd_open_aux(int y, int x)
 			square_open_door(cave, y, x);
 
 			/* Update the visuals */
+			sqinfo_on(cave->squares[y][x].info, SQUARE_MARK);
+			square_light_spot(cave, y, x);
 			player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 
 			/* Experience */
@@ -325,6 +328,8 @@ static bool do_cmd_open_aux(int y, int x)
 	} else {
 		/* Closed door */
 		square_open_door(cave, y, x);
+		sqinfo_on(cave->squares[y][x].info, SQUARE_MARK);
+		square_light_spot(cave, y, x);
 		player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 		sound(MSG_OPENDOOR);
 	}
@@ -469,8 +474,10 @@ static bool do_cmd_close_aux(int y, int x)
 	{
 		msg("The door appears to be broken.");
 	} else {
-		/* Open door */
+		/* Close door */
 		square_close_door(cave, y, x);
+		sqinfo_on(cave->squares[y][x].info, SQUARE_MARK);
+		square_light_spot(cave, y, x);
 		player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
 		sound(MSG_SHUTDOOR);
 	}
@@ -614,42 +621,35 @@ static bool do_cmd_tunnel_aux(int y, int x)
 	bool more = FALSE;
 	int digging_chances[DIGGING_MAX];
 	bool okay = FALSE;
-	bool gold = FALSE;
+	bool gold = square_hasgoldvein(cave, y, x);
+	bool rubble = square_isrubble(cave, y, x);
 
 	/* Verify legality */
 	if (!do_cmd_tunnel_test(y, x)) return (FALSE);
 
 	calc_digging_chances(&player->state, digging_chances);
 
-	/* Found gold */
-	if (square_hasgoldvein(cave, y, x))
-		gold = TRUE;
-
 	/* Do we succeed? */
-	okay = (digging_chances[square_digging(cave, y, x)] > randint0(1600));
+	okay = (digging_chances[square_digging(cave, y, x) - 1] > randint0(1600));
 
 	/* Success */
 	if (okay && twall(y, x)) {
 		/* Rubble is a special case - could be handled more generally NRM */
-		if (square_isrubble(cave, y, x)) {
+		if (rubble) {
 			/* Message */
 			msg("You have removed the rubble.");
 
-			/* Place an object */
-			if (randint0(100) < 10)	{
+			/* Place an object (except in town) */
+			if ((randint0(100) < 10) && player->depth) {
 				/* Create a simple object */
 				place_object(cave, y, x, player->depth, FALSE, FALSE,
 							 ORIGIN_RUBBLE, 0);
 
 				/* Observe the new object */
 				if (!ignore_item_ok(square_object(cave, y, x)) &&
-					player_can_see_bold(y, x))
+					square_isseen(cave, y, x))
 					msg("You have found something!");
-			} else {
-				/* Message, keep digging */
-				msg("You dig in the rubble.");
-				more = TRUE;
-			}
+			} 
 		} else if (gold) {
 			/* Found treasure */
 			place_gold(cave, y, x, player->depth, ORIGIN_FLOOR);
@@ -659,7 +659,7 @@ static bool do_cmd_tunnel_aux(int y, int x)
 		}
 	} else {
 		/* Failure, continue digging */
-		if (square_isrubble(cave, y, x))
+		if (rubble)
 			msg("You dig in the rubble.");
 		else
 			msg("You tunnel into the %s.",
@@ -1037,18 +1037,18 @@ void move_player(int dir, bool disarm)
 	int x = px + ddx[dir];
 
 	int m_idx = cave->squares[y][x].mon;
-	struct monster *m_ptr = cave_monster(cave, m_idx);
+	struct monster *mon = cave_monster(cave, m_idx);
 	bool alterable = (square_isknowntrap(cave, y, x) ||
 					  square_iscloseddoor(cave, y, x));
 
 	/* Attack monsters, alter traps/doors on movement, hit obstacles or move */
 	if (m_idx > 0) {
 		/* Mimics surprise the player */
-		if (is_mimicking(m_ptr)) {
-			become_aware(m_ptr);
+		if (is_mimicking(mon)) {
+			become_aware(mon);
 
 			/* Mimic wakes up */
-			mon_clear_timed(m_ptr, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE, FALSE);
+			mon_clear_timed(mon, MON_TMD_SLEEP, MON_TMD_FLG_NOMESSAGE, FALSE);
 
 		} else {
 			py_attack(y, x);
@@ -1059,6 +1059,9 @@ void move_player(int dir, bool disarm)
 			cmd_set_repeat(99);
 
 		do_cmd_alter_aux(dir);
+	} else if (player->upkeep->running && square_isknowntrap(cave, y, x)) {
+		/* Stop running before known traps */
+		disturb(player, 0);
 	} else if (!square_ispassable(cave, y, x)) {
 		/* Disturb the player */
 		disturb(player, 0);
@@ -1122,7 +1125,11 @@ void move_player(int dir, bool disarm)
 			/* Disturb */
 			disturb(player, 0);
 			event_signal(EVENT_ENTER_STORE);
+			event_remove_handler_type(EVENT_ENTER_STORE);
+			event_signal(EVENT_USE_STORE);
+			event_remove_handler_type(EVENT_USE_STORE);
 			event_signal(EVENT_LEAVE_STORE);
+			event_remove_handler_type(EVENT_LEAVE_STORE);
 		} else {
 			/* Handle objects (later) */
 			cmdq_push(CMD_AUTOPICKUP);
@@ -1154,16 +1161,16 @@ void move_player(int dir, bool disarm)
 static bool do_cmd_walk_test(int y, int x)
 {
 	int m_idx = cave->squares[y][x].mon;
-	struct monster *m_ptr = cave_monster(cave, m_idx);
+	struct monster *mon = cave_monster(cave, m_idx);
 
 	/* Allow attack on visible monsters if unafraid */
-	if (m_idx > 0 && mflag_has(m_ptr->mflag, MFLAG_VISIBLE) &&
-		!is_mimicking(m_ptr)) {
+	if (m_idx > 0 && mflag_has(mon->mflag, MFLAG_VISIBLE) &&
+		!is_mimicking(mon)) {
 		/* Handle player fear */
 		if (player_of_has(player, OF_AFRAID)) {
 			/* Extract monster name (or "it") */
 			char m_name[80];
-			monster_desc(m_name, sizeof(m_name), m_ptr, MDESC_DEFAULT);
+			monster_desc(m_name, sizeof(m_name), mon, MDESC_DEFAULT);
 
 			/* Message */
 			msgt(MSG_AFRAID, "You are too afraid to attack %s!", m_name);
@@ -1187,6 +1194,9 @@ static bool do_cmd_walk_test(int y, int x)
 		else if (square_iscloseddoor(cave, y, x))
 			/* Door */
 			return TRUE;
+		else if (square_isbright(cave, y, x))
+			/* Lava */
+			msgt(MSG_HITWALL, "The heat of the lava turns you away!");
 		else
 			/* Wall */
 			msgt(MSG_HITWALL, "There is a wall in the way!");
@@ -1338,7 +1348,11 @@ void do_cmd_hold(struct command *cmd)
 	if (square_isshop(cave, player->py, player->px)) {
 		disturb(player, 0);
 		event_signal(EVENT_ENTER_STORE);
+		event_remove_handler_type(EVENT_ENTER_STORE);
+		event_signal(EVENT_USE_STORE);
+		event_remove_handler_type(EVENT_USE_STORE);
 		event_signal(EVENT_LEAVE_STORE);
+		event_remove_handler_type(EVENT_LEAVE_STORE);
 
 		/* Turn will be taken exiting the shop */
 		player->upkeep->energy_use = 0;
@@ -1369,6 +1383,13 @@ void do_cmd_rest(struct command *cmd)
 	if (!player_is_resting(player)) {
 		player->searching = FALSE;
 		player->upkeep->update |= (PU_BONUS);
+
+		/* If a number of turns was entered, remember it */
+		if (n > 1)
+			player_set_resting_repeat_count(player, n);
+		else if (n == 1)
+			/* If we're repeating the command, use the same count */
+			n = player_get_resting_repeat_count(player);
 	}
 
 	/* Set the counter, and stop if told to */
@@ -1379,9 +1400,8 @@ void do_cmd_rest(struct command *cmd)
 	/* Take a turn */
 	player_resting_step_turn(player);
 
-	/* Redraw the state */
-	player->upkeep->redraw |= (PR_STATE);
-	handle_stuff(player->upkeep);
+	/* Redraw the state if requested */
+	handle_stuff(player);
 
 	/* Prepare to continue, or cancel and clean up */
 	if (player_resting_count(player) > 0) {
@@ -1390,8 +1410,9 @@ void do_cmd_rest(struct command *cmd)
 	} else if (player_resting_is_special(n)) {
 		cmdq_push(CMD_REST);
 		cmd_set_arg_choice(cmdq_peek(), "choice", n);
+		player_set_resting_repeat_count(player, 0);
 	} else {
-		player_resting_cancel(player);
+		player_resting_cancel(player, FALSE);
 	}
 
 }

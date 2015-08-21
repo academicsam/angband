@@ -22,6 +22,7 @@
 #include "obj-pile.h"
 #include "obj-util.h"
 #include "parser.h"
+#include "player-calcs.h"
 #include "player-quest.h"
 
 /**
@@ -144,7 +145,7 @@ bool is_quest(int level)
 	if (!level) return FALSE;
 
 	for (i = 0; i < z_info->quest_max; i++)
-		if (quests[i].level == level)
+		if (player->quests[i].level == level)
 			return TRUE;
 
 	return FALSE;

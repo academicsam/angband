@@ -29,6 +29,7 @@
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "player-attack.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "z-textblock.h"
 
@@ -64,7 +65,7 @@ void get_attack_colors(int melee_colors[RBE_MAX], int spell_colors[RSF_MAX])
 	struct object *obj;
 	bool known;
 	bitflag f[OF_SIZE];
-	player_state st = player->known_state;
+	struct player_state st = player->known_state;
 	int tmp_col;
 
 	/* Initialize the colors to green */
@@ -91,7 +92,7 @@ void get_attack_colors(int melee_colors[RBE_MAX], int spell_colors[RSF_MAX])
 			melee_colors[RBE_EAT_ITEM] = COLOUR_L_RED;
 
 		/* Eat food - requries food */
-		if (tval_is_food(obj))
+		if (tval_is_edible(obj))
 			melee_colors[RBE_EAT_FOOD] = COLOUR_YELLOW;
 
 		/* Eat light - requires a fuelled light */
@@ -378,7 +379,7 @@ void get_attack_colors(int melee_colors[RBE_MAX], int spell_colors[RSF_MAX])
 /**
  * Update which bits of lore are known
  */
-void lore_update(const monster_race *race, monster_lore *lore)
+void lore_update(const struct monster_race *race, struct monster_lore *lore)
 {
 	int i;
 
@@ -390,7 +391,8 @@ void lore_update(const monster_race *race, monster_lore *lore)
 	/* Blows */
 	for (i = 0; i < z_info->mon_blows_max; i++) {
 		if (!race->blow) break;
-		if (lore->blows[i].times_seen || lore->all_known) {
+		if (lore->blow_known[i] || lore->blows[i].times_seen ||
+			lore->all_known) {
 			lore->blow_known[i] = TRUE;
 			lore->blows[i].method = race->blow[i].method;
 			lore->blows[i].effect = race->blow[i].effect;
@@ -423,51 +425,52 @@ void lore_update(const monster_race *race, monster_lore *lore)
  *
  * Sets the all_known variable, all flags and all relevant spell flags.
  */
-void cheat_monster_lore(const monster_race *r_ptr, monster_lore *l_ptr)
+void cheat_monster_lore(const struct monster_race *race, struct monster_lore *lore)
 {
-	assert(r_ptr);
-	assert(l_ptr);
+	assert(race);
+	assert(lore);
 
 	/* Full knowledge */
-	l_ptr->all_known = TRUE;
-	lore_update(r_ptr, l_ptr);
+	lore->all_known = TRUE;
+	lore_update(race, lore);
 
 	/* Know all the flags */
-	rf_setall(l_ptr->flags);
-	rsf_copy(l_ptr->spell_flags, r_ptr->spell_flags);
+	rf_setall(lore->flags);
+	rsf_copy(lore->spell_flags, race->spell_flags);
 }
 
 /**
  * Forget everything about a monster.
  */
-void wipe_monster_lore(const monster_race *r_ptr, monster_lore *l_ptr)
+void wipe_monster_lore(const struct monster_race *race, struct monster_lore *lore)
 {
-	assert(r_ptr);
-	assert(l_ptr);
+	assert(race);
+	assert(lore);
 
-	mem_free(l_ptr->drops);
-	mem_free(l_ptr->friends);
-	mem_free(l_ptr->friends_base);
-	mem_free(l_ptr->mimic_kinds);
-	memset(l_ptr, 0, sizeof(*l_ptr));
+	mem_free(lore->drops);
+	mem_free(lore->friends);
+	mem_free(lore->friends_base);
+	mem_free(lore->mimic_kinds);
+	memset(lore, 0, sizeof(*lore));
 }
 
 /**
  * Learn about a monster (by "probing" it)
  */
-void lore_do_probe(struct monster *m)
+void lore_do_probe(struct monster *mon)
 {
-	monster_lore *l_ptr = get_lore(m->race);
+	struct monster_lore *lore = get_lore(mon->race);
 	unsigned i;
 
 	/* Know various things */
 	for (i = 0; i < z_info->mon_blows_max; i++)
-		l_ptr->blow_known[i] = TRUE;
-	rf_setall(l_ptr->flags);
-	rsf_copy(l_ptr->spell_flags, m->race->spell_flags);
+		lore->blow_known[i] = TRUE;
+	rf_setall(lore->flags);
+	rsf_copy(lore->spell_flags, mon->race->spell_flags);
+	lore_update(mon->race, lore);
 
 	/* Update monster recall window */
-	if (player->upkeep->monster_race == m->race)
+	if (player->upkeep->monster_race == mon->race)
 		player->upkeep->redraw |= (PR_MONSTER);
 }
 
@@ -484,25 +487,25 @@ void lore_do_probe(struct monster *m)
  * gold and items are dropped, and remembers that information to be
  * described later by the monster recall code.
  */
-void lore_treasure(struct monster *m_ptr, int num_item, int num_gold)
+void lore_treasure(struct monster *mon, int num_item, int num_gold)
 {
-	monster_lore *l_ptr = get_lore(m_ptr->race);
+	struct monster_lore *lore = get_lore(mon->race);
 
 	assert(num_item >= 0);
 	assert(num_gold >= 0);
 
 	/* Note the number of things dropped */
-	if (num_item > l_ptr->drop_item)
-		l_ptr->drop_item = num_item;
-	if (num_gold > l_ptr->drop_gold)
-		l_ptr->drop_gold = num_gold;
+	if (num_item > lore->drop_item)
+		lore->drop_item = num_item;
+	if (num_gold > lore->drop_gold)
+		lore->drop_gold = num_gold;
 
 	/* Learn about drop quality */
-	rf_on(l_ptr->flags, RF_DROP_GOOD);
-	rf_on(l_ptr->flags, RF_DROP_GREAT);
+	rf_on(lore->flags, RF_DROP_GOOD);
+	rf_on(lore->flags, RF_DROP_GREAT);
 
 	/* Update monster recall window */
-	if (player->upkeep->monster_race == m_ptr->race)
+	if (player->upkeep->monster_race == mon->race)
 		player->upkeep->redraw |= (PR_MONSTER);
 }
 
@@ -513,11 +516,12 @@ void lore_treasure(struct monster *m_ptr, int num_item, int num_gold)
  * Known flags will be 1 for present, or 0 for not present. Unknown flags
  * will always be 0.
  */
-void monster_flags_known(const monster_race *r_ptr, const monster_lore *l_ptr,
-		bitflag flags[RF_SIZE])
+void monster_flags_known(const struct monster_race *race,
+						 const struct monster_lore *lore,
+						 bitflag flags[RF_SIZE])
 {
-	rf_copy(flags, r_ptr->flags);
-	rf_inter(flags, l_ptr->flags);
+	rf_copy(flags, race->flags);
+	rf_inter(flags, lore->flags);
 }
 
 /**
@@ -641,7 +645,7 @@ static const char *lore_describe_speed(byte speed)
 /**
  * Return a value describing the sex of the provided monster race.
  */
-static monster_sex_t lore_monster_sex(const monster_race *race)
+static monster_sex_t lore_monster_sex(const struct monster_race *race)
 {
 	if (rf_has(race->flags, RF_FEMALE))
 		return MON_SEX_FEMALE;
@@ -751,7 +755,7 @@ static int lore_insert_flag_description(int flag,
  */
 static int lore_insert_unknown_vulnerability(int flag,
 											 const bitflag known_flags[RF_SIZE],
-											 const monster_lore *lore,
+											 const struct monster_lore *lore,
 											 const char *list[], int index)
 {
 	if (rf_has(lore->flags, flag) && !rf_has(known_flags, flag)) {
@@ -782,8 +786,8 @@ static int lore_insert_unknown_vulnerability(int flag,
  * \param index is where in `name_list`, `color_list`, and `damage_list`
  *        the description will be inserted.
  */
-static int lore_insert_spell_description(int spell, const monster_race *race,
-										 const monster_lore *lore,
+static int lore_insert_spell_description(int spell, const struct monster_race *race,
+										 const struct monster_lore *lore,
 										 const int spell_colors[RSF_MAX],
 										 bool know_hp, const char *name_list[],
 										 int color_list[], int damage_list[],
@@ -892,8 +896,8 @@ static void lore_append_spell_descriptions(textblock *tb,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_kills(textblock *tb, const monster_race *race,
-					   const monster_lore *lore,
+void lore_append_kills(textblock *tb, const struct monster_race *race,
+					   const struct monster_lore *lore,
 					   const bitflag known_flags[RF_SIZE])
 {
 	monster_sex_t msex = MON_SEX_NEUTER;
@@ -964,7 +968,7 @@ void lore_append_kills(textblock *tb, const monster_race *race,
  * \param append_utf8 indicates if we should append the flavor text as UTF-8
  *        (which is preferred for spoiler files).
  */
-void lore_append_flavor(textblock *tb, const monster_race *race,
+void lore_append_flavor(textblock *tb, const struct monster_race *race,
 						bool append_utf8)
 {
 	assert(tb && race);
@@ -988,8 +992,8 @@ void lore_append_flavor(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_movement(textblock *tb, const monster_race *race,
-						  const monster_lore *lore,
+void lore_append_movement(textblock *tb, const struct monster_race *race,
+						  const struct monster_lore *lore,
 						  bitflag known_flags[RF_SIZE])
 {
 	assert(tb && race && lore);
@@ -1100,13 +1104,13 @@ void lore_append_movement(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_toughness(textblock *tb, const monster_race *race,
-						   const monster_lore *lore,
+void lore_append_toughness(textblock *tb, const struct monster_race *race,
+						   const struct monster_lore *lore,
 						   bitflag known_flags[RF_SIZE])
 {
 	monster_sex_t msex = MON_SEX_NEUTER;
 	long chance = 0, chance2 = 0;
-	object_type *weapon = equipped_item_by_slot_name(player, "weapon");
+	struct object *weapon = equipped_item_by_slot_name(player, "weapon");
 
 	assert(tb && race && lore);
 
@@ -1163,8 +1167,8 @@ void lore_append_toughness(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_exp(textblock *tb, const monster_race *race,
-					 const monster_lore *lore,
+void lore_append_exp(textblock *tb, const struct monster_race *race,
+					 const struct monster_lore *lore,
 					 bitflag known_flags[RF_SIZE])
 {
 	const char *ordinal, *article;
@@ -1191,9 +1195,9 @@ void lore_append_exp(textblock *tb, const monster_race *race,
 					 (long)1000 / player->lev + 5) / 10);
 
 	/* Calculate textual representation */
-	strnfmt(buf, sizeof(buf), "%ld", (long)exp_integer);
+	strnfmt(buf, sizeof(buf), "%d", exp_integer);
 	if (exp_fraction)
-		my_strcat(buf, format(".%02ld", (long)exp_fraction), sizeof(buf));
+		my_strcat(buf, format(".%02d", exp_fraction), sizeof(buf));
 
 	/* Mention the experience */
 	textblock_append(tb, " is worth ");
@@ -1213,8 +1217,8 @@ void lore_append_exp(textblock *tb, const monster_race *race,
 	if ((level == 8) || (level == 11) || (level == 18)) article = "an";
 
 	/* Mention the dependance on the player's level */
-	textblock_append(tb, " for %s %lu%s level character.  ", article,
-					 (long)level, ordinal);
+	textblock_append(tb, " for %s %u%s level character.  ", article,
+					 level, ordinal);
 }
 
 /**
@@ -1228,8 +1232,8 @@ void lore_append_exp(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_drop(textblock *tb, const monster_race *race,
-					  const monster_lore *lore,
+void lore_append_drop(textblock *tb, const struct monster_race *race,
+					  const struct monster_lore *lore,
 					  bitflag known_flags[RF_SIZE])
 {
 	int n = 0;
@@ -1296,8 +1300,8 @@ void lore_append_drop(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_abilities(textblock *tb, const monster_race *race,
-						   const monster_lore *lore,
+void lore_append_abilities(textblock *tb, const struct monster_race *race,
+						   const struct monster_lore *lore,
 						   bitflag known_flags[RF_SIZE])
 {
 	int list_index;
@@ -1462,8 +1466,8 @@ void lore_append_abilities(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_awareness(textblock *tb, const monster_race *race,
-						   const monster_lore *lore,
+void lore_append_awareness(textblock *tb, const struct monster_race *race,
+						   const struct monster_lore *lore,
 						   bitflag known_flags[RF_SIZE])
 {
 	monster_sex_t msex = MON_SEX_NEUTER;
@@ -1495,8 +1499,8 @@ void lore_append_awareness(textblock *tb, const monster_race *race,
  * \param known_flags is the preprocessed bitfield of race flags known to the
  *        player.
  */
-void lore_append_friends(textblock *tb, const monster_race *race,
-						 const monster_lore *lore,
+void lore_append_friends(textblock *tb, const struct monster_race *race,
+						 const struct monster_lore *lore,
 						 bitflag known_flags[RF_SIZE])
 {
 	monster_sex_t msex = MON_SEX_NEUTER;
@@ -1530,8 +1534,8 @@ void lore_append_friends(textblock *tb, const monster_race *race,
  * \param spell_colors is a list of colors that is associated with each
  *        RSF_ spell.
  */
-void lore_append_spells(textblock *tb, const monster_race *race,
-						const monster_lore *lore,
+void lore_append_spells(textblock *tb, const struct monster_race *race,
+						const struct monster_lore *lore,
 						bitflag known_flags[RF_SIZE],
 						const int spell_colors[RSF_MAX])
 {
@@ -1745,8 +1749,8 @@ void lore_append_spells(textblock *tb, const monster_race *race,
  * \param melee_colors is a list of colors that is associated with each
  *        RBE_ effect.
  */
-void lore_append_attack(textblock *tb, const monster_race *race,
-						const monster_lore *lore,
+void lore_append_attack(textblock *tb, const struct monster_race *race,
+						const struct monster_lore *lore,
 						bitflag known_flags[RF_SIZE],
 						const int melee_colors[RBE_MAX])
 {
@@ -1842,7 +1846,7 @@ void lore_append_attack(textblock *tb, const monster_race *race,
 /**
  * Get the lore record for this monster race.
  */
-monster_lore *get_lore(const monster_race *race)
+struct monster_lore *get_lore(const struct monster_race *race)
 {
 	assert(race);
 	return &l_list[race->ridx];
@@ -1870,32 +1874,33 @@ void write_lore_entries(ang_file *fff)
 
 	for (i = 0; i < z_info->r_max; i++) {
 		/* Current entry */
-		monster_race *race = &r_info[i];
-		monster_lore *lore = &l_list[i];
+		struct monster_race *race = &r_info[i];
+		struct monster_lore *lore = &l_list[i];
 
 		/* Ignore non-existent or unseen monsters */
 		if (!race->name) continue;
-		if (!lore->sights) continue;
+		if (!lore->sights && !lore->all_known) continue;
 
 		/* Output 'name' */
 		file_putf(fff, "name:%d:%s\n", i, race->name);
 
-		/* Output 'T' for template if we're remembering everything */
+		/* Output base if we're remembering everything */
 		if (lore->all_known)
-			file_putf(fff, "T:%s\n", race->base->name);
+			file_putf(fff, "base:%s\n", race->base->name);
 
 		/* Output counts */
 		file_putf(fff, "counts:%d:%d:%d:%d:%d:%d:%d\n", lore->sights,
 				  lore->deaths, lore->tkills, lore->wake, lore->ignore,
 				  lore->cast_innate, lore->cast_spell);
 
-		/* Output 'B' for "Blows" (up to four lines) */
-		for (n = 0; n < 4; n++) {
+		/* Output blow (up to max blows) */
+		for (n = 0; n < z_info->mon_blows_max; n++) {
 			/* End of blows */
-			if (!lore->blow_known[n]) continue;
+			if (!lore->blow_known[n] && !lore->all_known) continue;
+			if (!lore->blows[n].method) continue;
 
 			/* Output blow method */
-			file_putf(fff, "B:%s", r_info_blow_method[lore->blows[n].method]);
+			file_putf(fff, "blow:%s", r_info_blow_method[lore->blows[n].method]);
 
 			/* Output blow effect (may be none) */
 			file_putf(fff, ":%s", r_info_blow_effect[lore->blows[n].effect]);
@@ -1916,12 +1921,13 @@ void write_lore_entries(ang_file *fff)
 			file_putf(fff, "\n");
 		}
 
-		/* Output 'F' for "Flags" */
-		write_flags(fff, "F:", lore->flags, RF_SIZE, r_info_flags);
+		/* Output flags */
+		write_flags(fff, "flags:", lore->flags, RF_SIZE, r_info_flags);
 
-		/* Output 'S' for "Spell Flags" (multiple lines) */
+		/* Output spell flags (multiple lines) */
 		rsf_inter(lore->spell_flags, race->spell_flags);
-		write_flags(fff, "S:", lore->spell_flags, RSF_SIZE, r_info_spell_flags);
+		write_flags(fff, "spells:", lore->spell_flags, RSF_SIZE,
+					r_info_spell_flags);
 
 		/* Output 'drop', 'drop-artifact' */
 		if (lore->drops) {

@@ -1111,7 +1111,7 @@ void monster_death_stats(int m_idx)
 		get_obj_data(obj, mon->fy, mon->fx, TRUE, uniq);
 
 		/* Delete the object */
-		object_delete(obj);
+		object_delete(&obj);
 
 		/* Next */
 		obj = next;
@@ -1410,7 +1410,7 @@ static void scan_for_objects(void)
 
 				/* Delete the object */
 				square_excise_object(cave, y, x, obj);
-				object_delete(obj);
+				object_delete(&obj);
 			}
 		}
 	}
@@ -1823,7 +1823,7 @@ void pit_stats(void)
 
 		for (i = 0; i < z_info->pit_max; i++) {
 			int offset, dist;
-			pit_profile *pit = &pit_info[i];
+			struct pit_profile *pit = &pit_info[i];
 
 			if (!pit->name || pit->room_type != type) continue;
 
@@ -1840,7 +1840,7 @@ void pit_stats(void)
 	}
 
 	for (p = 0; p < z_info->pit_max; p++) {
-		pit_profile *pit = &pit_info[p];
+		struct pit_profile *pit = &pit_info[p];
 		if (pit->name)
 			msg("Type: %s, Number: %d.", pit->name, hist[p]);
 	}

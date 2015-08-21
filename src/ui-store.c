@@ -33,6 +33,7 @@
 #include "obj-pile.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "store.h"
 #include "target.h"
@@ -302,9 +303,9 @@ static void store_display_entry(struct menu *menu, int oid, bool cursor, int row
 
 		/* Actually draw the price */
 		if (tval_can_have_charges(obj) && (obj->number > 1))
-			strnfmt(out_val, sizeof out_val, "%9ld avg", (long)x);
+			strnfmt(out_val, sizeof out_val, "%9d avg", x);
 		else
-			strnfmt(out_val, sizeof out_val, "%9ld    ", (long)x);
+			strnfmt(out_val, sizeof out_val, "%9d    ", x);
 
 		c_put_str(colour, out_val, row, ctx->scr_places_x[LOC_PRICE]);
 	}
@@ -343,8 +344,8 @@ static void store_display_frame(struct store_context *ctx)
 		put_str(owner_name, ctx->scr_places_y[LOC_OWNER], 1);
 
 		/* Show the max price in the store (above prices) */
-		strnfmt(buf, sizeof(buf), "%s (%ld)", store_name,
-				(long)(proprietor->max_cost));
+		strnfmt(buf, sizeof(buf), "%s (%d)", store_name,
+				proprietor->max_cost);
 		prt(buf, ctx->scr_places_y[LOC_OWNER],
 			ctx->scr_places_x[LOC_OWNER] - strlen(buf));
 
@@ -435,7 +436,7 @@ static void store_redraw(struct store_context *ctx)
 	}
 
 	if (ctx->flags & (STORE_GOLD_CHANGE)) {
-		prt(format("Gold Remaining: %9ld", (long)player->au),
+		prt(format("Gold Remaining: %9d", player->au),
 				ctx->scr_places_y[LOC_AU], ctx->scr_places_x[LOC_AU]);
 		ctx->flags &= ~(STORE_GOLD_CHANGE);
 	}
@@ -467,7 +468,7 @@ static bool store_get_check(const char *prompt)
 static bool store_sell(struct store_context *ctx)
 {
 	int amt;
-	int get_mode = USE_EQUIP | USE_INVEN | USE_FLOOR;
+	int get_mode = USE_EQUIP | USE_INVEN | USE_FLOOR | USE_QUIVER;
 
 	struct store *store = ctx->store;
 
@@ -652,7 +653,7 @@ static bool store_purchase(struct store_context *ctx, int item, bool single)
 	/* Ensure we have room */
 	if (!inven_carry_okay(dummy)) {
 		msg("You cannot carry that many items.");
-		object_delete(dummy);
+		object_delete(&dummy);
 		return FALSE;
 	}
 
@@ -692,7 +693,7 @@ static bool store_purchase(struct store_context *ctx, int item, bool single)
 	/* Update the display */
 	ctx->flags |= STORE_GOLD_CHANGE;
 
-	object_delete(dummy);
+	object_delete(&dummy);
 
 	/* Not kicked out */
 	return TRUE;
@@ -738,21 +739,21 @@ static void store_menu_set_selections(struct menu *menu, bool knowledge_menu)
 	if (knowledge_menu) {
 		if (OPT(rogue_like_commands)) {
 			/* These two can't intersect! */
-			menu->cmd_keys = "?Ieilx";
+			menu->cmd_keys = "?|Ieilx";
 			menu->selections = "abcdfghjkmnopqrstuvwyz134567";
 		} else {
 			/* These two can't intersect! */
-			menu->cmd_keys = "?Ieil";
+			menu->cmd_keys = "?|Ieil";
 			menu->selections = "abcdfghjkmnopqrstuvwxyz13456";
 		}
 	} else {
 		if (OPT(rogue_like_commands)) {
 			/* These two can't intersect! */
-			menu->cmd_keys = "\x04\x05\x10?={}~CEIPTdegilpswx"; /* \x10 = ^p , \x04 = ^D, \x05 = ^E */
+			menu->cmd_keys = "\x04\x05\x10?={|}~CEIPTdegilpswx"; /* \x10 = ^p , \x04 = ^D, \x05 = ^E */
 			menu->selections = "abcfmnoqrtuvyz13456790ABDFGH";
 		} else {
 			/* These two can't intersect! */
-			menu->cmd_keys = "\x05\x010?={}~CEIbdegiklpstwx"; /* \x05 = ^E, \x10 = ^p */
+			menu->cmd_keys = "\x05\x010?={|}~CEIbdegiklpstwx"; /* \x05 = ^E, \x10 = ^p */
 			menu->selections = "acfhjmnoqruvyz13456790ABDFGH";
 		}
 	}
@@ -776,6 +777,7 @@ static bool store_process_command_key(struct keypress kp)
 	int cmd = 0;
 
 	/* Hack -- no flush needed */
+	prt("", 0, 0);
 	msg_flag = FALSE;
 
 	/* Process the keycode */
@@ -797,6 +799,7 @@ static bool store_process_command_key(struct keypress kp)
 
 		case 'e': do_cmd_equip(); break;
 		case 'i': do_cmd_inven(); break;
+		case '|': do_cmd_quiver(); break;
 		case KTRL('E'): toggle_inven_equip(); break;
 		case 'C': do_cmd_change_name(); break;
 		case KTRL('P'): do_cmd_messages(); break;
@@ -899,7 +902,7 @@ static void context_menu_store_item(struct store_context *ctx, const int oid, in
 	bool home = (store->sidx == STORE_HOME) ? TRUE : FALSE;
 
 	struct menu *m = menu_dynamic_new();
-	object_type *obj = ctx->list[oid];
+	struct object *obj = ctx->list[oid];
 
 	int selected;
 	char *labels;
@@ -983,8 +986,8 @@ static bool store_menu_handle(struct menu *m, const ui_event *event, int oid)
 				cmdq_pop(CMD_STORE);
 
 				/* Notice and handle stuff */
-				notice_stuff(player->upkeep);
-				handle_stuff(player->upkeep);
+				notice_stuff(player);
+				handle_stuff(player);
 
 				/* Display the store */
 				store_display_recalc(ctx);
@@ -1064,8 +1067,8 @@ static bool store_menu_handle(struct menu *m, const ui_event *event, int oid)
 		}
 
 		/* Notice and handle stuff */
-		notice_stuff(player->upkeep);
-		handle_stuff(player->upkeep);
+		notice_stuff(player);
+		handle_stuff(player);
 
 		return processed;
 	}
@@ -1150,22 +1153,30 @@ static void refresh_stock(game_event_type type, game_event_data *unused, void *u
 }
 
 /**
- * Enter a store, and interact with it.
+ * Enter a store.
  */
-void textui_enter_store(void)
+void enter_store(game_event_type type, game_event_data *data, void *user)
+{
+	/* Check that we're on a store */
+	if (!square_isshop(cave, player->py, player->px)) {
+		msg("You see no store here.");
+		return;
+	}
+
+	/* Shut down the normal game view */
+	event_signal(EVENT_LEAVE_WORLD);
+}
+
+/**
+ * Interact with a store.
+ */
+void use_store(game_event_type type, game_event_data *data, void *user)
 {
 	struct store *store = store_at(cave, player->py, player->px);
 	struct store_context ctx;
 
 	/* Check that we're on a store */
-	if (!store) {
-		msg("You see no store here.");
-		return;
-	}
-
-	/* Shut down the normal game view - it won't be updated - and start
-	   up the store state. */
-	event_signal(EVENT_LEAVE_GAME);
+	if (!store) return;
 
 	/* Forget the view */
 	forget_view(cave);
@@ -1202,16 +1213,10 @@ void textui_enter_store(void)
 	screen_load();
 }
 
-void enter_store(game_event_type type, game_event_data *data, void *user)
-{
-	textui_enter_store();
-	event_remove_handler(EVENT_ENTER_STORE, enter_store, NULL);
-}
-
 void leave_store(game_event_type type, game_event_data *data, void *user)
 {
 	/* Switch back to the normal game view. */
-	event_signal(EVENT_ENTER_GAME);
+	event_signal(EVENT_ENTER_WORLD);
 
 	/* Update the visuals */
 	player->upkeep->update |= (PU_UPDATE_VIEW | PU_MONSTERS);
@@ -1221,6 +1226,4 @@ void leave_store(game_event_type type, game_event_data *data, void *user)
 
 	/* Redraw map */
 	player->upkeep->redraw |= (PR_MAP);
-
-	event_remove_handler(EVENT_LEAVE_STORE, leave_store, NULL);
 }

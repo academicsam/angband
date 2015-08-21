@@ -21,6 +21,7 @@
 #include "cave.h"
 #include "mon-util.h"
 #include "obj-identify.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "player-util.h"
 
@@ -34,15 +35,25 @@ static bool set_stun(struct player *p, int v);
 static bool set_cut(struct player *p, int v);
 
 
-static timed_effect effects[] =
-{
-	#define TMD(a, b, c, d, e, f, g, h, i, j) { b, c, d, e, f, g, h, i, j },
+static struct timed_effect {
+	const char *description;
+	const char *on_begin;
+	const char *on_end;
+	const char *on_increase;
+	const char *on_decrease;
+	u32b flag_redraw, flag_update;
+	int msg;
+	int fail_code;
+	int fail;
+} effects[] = {
+	#define TMD(a, b, c, d, e, f, g, h, i, j, k) \
+		{ b, c, d, e, f, g, h, i, j, k },
 	#include "list-player-timed.h"
 	#undef TMD
 };
 
 static const char *timed_name_list[] = {
-	#define TMD(a, b, c, d, e, f, g, h, i, j) #a,
+	#define TMD(a, b, c, d, e, f, g, h, i, j, k) #a,
 	#include "list-player-timed.h"
 	#undef TMD
 	"MAX",
@@ -68,6 +79,14 @@ const char *timed_idx_to_name(int type)
     return timed_name_list[type];
 }
 
+const char *timed_idx_to_desc(int type)
+{
+    assert(type >= 0);
+    assert(type < TMD_MAX);
+
+    return effects[type].description;
+}
+
 int timed_protect_flag(int type)
 {
 	return effects[type].fail;
@@ -78,7 +97,7 @@ int timed_protect_flag(int type)
  */
 bool player_set_timed(struct player *p, int idx, int v, bool notify)
 {
-	timed_effect *effect;
+	struct timed_effect *effect;
 
 	/* Hack -- Force good values */
 	v = (v > 10000) ? 10000 : (v < 0) ? 0 : v;
@@ -141,7 +160,7 @@ bool player_set_timed(struct player *p, int idx, int v, bool notify)
 	p->upkeep->redraw |= (PR_STATUS | effect->flag_redraw);
 
 	/* Handle stuff */
-	handle_stuff(p->upkeep);
+	handle_stuff(p);
 
 	/* Result */
 	return TRUE;
@@ -153,7 +172,7 @@ bool player_set_timed(struct player *p, int idx, int v, bool notify)
  */
 bool player_inc_timed(struct player *p, int idx, int v, bool notify, bool check)
 {
-	timed_effect *effect;
+	struct timed_effect *effect;
 
 	/* Find the effect */
 	effect = &effects[idx];
@@ -162,13 +181,13 @@ bool player_inc_timed(struct player *p, int idx, int v, bool notify, bool check)
 	if ((idx < 0) || (idx > TMD_MAX)) return FALSE;
 
 	/* Check that @ can be affected by this effect */
-	if (check && effects->fail_code) {
+	if (check && effect->fail_code) {
 		/* If the effect is from a monster action, extra stuff happens */
 		struct monster *mon = cave->mon_current > 0 ?
 			cave_monster(cave, cave->mon_current) : NULL;
 
 		/* Determine whether an effect can be prevented by a flag */
-		if (effects->fail_code == TMD_FAIL_FLAG_OBJECT) {
+		if (effect->fail_code == TMD_FAIL_FLAG_OBJECT) {
 			/* Effect is inhibited by an object flag */
 			equip_notice_flag(p, effect->fail);
 			if (mon) 
@@ -178,16 +197,18 @@ bool player_inc_timed(struct player *p, int idx, int v, bool notify, bool check)
 				msg("You resist the effect!");
 				return FALSE;
 			}
-		} else if (effects->fail_code == TMD_FAIL_FLAG_RESIST) {
+		} else if (effect->fail_code == TMD_FAIL_FLAG_RESIST) {
 			/* Effect is inhibited by a resist */
 			equip_notice_element(p, effect->fail);
 			if (p->state.el_info[effect->fail].res_level > 0)
 				return FALSE;
-		} else if (effects->fail_code == TMD_FAIL_FLAG_VULN) {
-			/* Effect is inhibited by a vulnerability */
-			equip_notice_element(p, effect->fail);
-			if (p->state.el_info[effect->fail].res_level < 0)
+		} else if (effect->fail_code == TMD_FAIL_FLAG_VULN) {
+			/* Effect is inhibited by a vulnerability 
+			 * the asymmetry with resists is OK for now - NRM */
+			if (p->state.el_info[effect->fail].res_level < 0) {
+				equip_notice_element(p, effect->fail);
 				return FALSE;
+			}
 		}
 
 		/* Special case */
@@ -327,7 +348,7 @@ static bool set_stun(struct player *p, int v)
 	disturb(player, 0);
 	p->upkeep->update |= (PU_BONUS);
 	p->upkeep->redraw |= (PR_STATUS);
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Result */
 	return (TRUE);
@@ -484,7 +505,7 @@ static bool set_cut(struct player *p, int v)
 	disturb(player, 0);
 	p->upkeep->update |= (PU_BONUS);
 	p->upkeep->redraw |= (PR_STATUS);
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Result */
 	return (TRUE);
@@ -578,7 +599,7 @@ bool player_set_food(struct player *p, int v)
 	disturb(player, 0);
 	p->upkeep->update |= (PU_BONUS);
 	p->upkeep->redraw |= (PR_STATUS);
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* Result */
 	return (TRUE);

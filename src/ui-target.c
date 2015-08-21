@@ -27,6 +27,7 @@
 #include "obj-pile.h"
 #include "obj-util.h"
 #include "player-attack.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "project.h"
 #include "target.h"
@@ -212,7 +213,7 @@ static bool adjust_panel_help(int y, int x, bool help)
  * The out_val array size needs to match the size that is passed in (since
  * this code was extracted from there).
  *
- * \param o_ptr is the object to describe.
+ * \param obj is the object to describe.
  * \param y is the cave row of the object.
  * \param x is the cave column of the object.
  * \param out_val is the string that holds the name of the object and is
@@ -222,7 +223,7 @@ static bool adjust_panel_help(int y, int x, bool help)
  * \param s3 is part of the output string.
  * \param coords is part of the output string
  */
-static ui_event target_recall_loop_object(object_type *o_ptr, int y, int x,
+static ui_event target_recall_loop_object(struct object *obj, int y, int x,
 										  char out_val[TARGET_OUT_VAL_SIZE],
 										  const char *s1, const char *s2,
 										  const char *s3, char *coords)
@@ -232,13 +233,13 @@ static ui_event target_recall_loop_object(object_type *o_ptr, int y, int x,
 
 	while (1) {
 		if (recall) {
-			display_object_recall_interactive(o_ptr);
+			display_object_recall_interactive(obj);
 			press = inkey_m();
 		} else {
 			char o_name[80];
 
 			/* Obtain an object description */
-			object_desc(o_name, sizeof(o_name), o_ptr,
+			object_desc(o_name, sizeof(o_name), obj,
 						ODESC_PREFIX | ODESC_FULL);
 
 			/* Describe the object */
@@ -367,12 +368,12 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 
 		/* Actual monsters */
 		if (cave->squares[y][x].mon > 0) {
-			monster_type *m_ptr = square_monster(cave, y, x);
-			const monster_lore *l_ptr = get_lore(m_ptr->race);
+			struct monster *mon = square_monster(cave, y, x);
+			const struct monster_lore *lore = get_lore(mon->race);
 
 			/* Visible */
-			if (mflag_has(m_ptr->mflag, MFLAG_VISIBLE) &&
-				!mflag_has(m_ptr->mflag, MFLAG_UNAWARE)) {
+			if (mflag_has(mon->mflag, MFLAG_VISIBLE) &&
+				!mflag_has(mon->mflag, MFLAG_UNAWARE)) {
 				bool recall = FALSE;
 
 				char m_name[80];
@@ -381,22 +382,22 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 				boring = FALSE;
 
 				/* Get the monster name ("a kobold") */
-				monster_desc(m_name, sizeof(m_name), m_ptr, MDESC_IND_VIS);
+				monster_desc(m_name, sizeof(m_name), mon, MDESC_IND_VIS);
 
 				/* Hack -- track this monster race */
-				monster_race_track(player->upkeep, m_ptr->race);
+				monster_race_track(player->upkeep, mon->race);
 
 				/* Hack -- health bar for this monster */
-				health_track(player->upkeep, m_ptr);
+				health_track(player->upkeep, mon);
 
 				/* Hack -- handle stuff */
-				handle_stuff(player->upkeep);
+				handle_stuff(player);
 
 				/* Interact */
 				while (1) {
 					/* Recall or target */
 					if (recall) {
-						lore_show_interactive(m_ptr->race, l_ptr);
+						lore_show_interactive(mon->race, lore);
 						press = inkey_m();
 					} else {
 						char buf[80];
@@ -456,15 +457,15 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 				}
 
 				/* Take account of gender */
-				if (rf_has(m_ptr->race->flags, RF_FEMALE)) s1 = "She is ";
-				else if (rf_has(m_ptr->race->flags, RF_MALE)) s1 = "He is ";
+				if (rf_has(mon->race->flags, RF_FEMALE)) s1 = "She is ";
+				else if (rf_has(mon->race->flags, RF_MALE)) s1 = "He is ";
 				else s1 = "It is ";
 
 				/* Use a verb */
 				s2 = "carrying ";
 
 				/* Scan all objects being carried */
-				for (obj = m_ptr->held_obj; obj; obj = obj->next) {
+				for (obj = mon->held_obj; obj; obj = obj->next) {
 					char o_name[80];
 
 					/* Obtain an object description */
@@ -534,7 +535,7 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 				}
 
 				/* Pick proper indefinite article */
-				s3 = (is_a_vowel(trap->kind->name[0])) ? "an " : "a ";
+				s3 = (is_a_vowel(trap->kind->desc[0])) ? "an " : "a ";
 
 				/* Describe, and prompt for recall */
 				if (player->wizard) {
@@ -545,7 +546,7 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 							(int)cave->squares[y][x].when);
 				} else {
 					strnfmt(out_val, sizeof(out_val), "%s%s%s%s, %s.", 
-							s1, s2, s3, trap->kind->name, coords);
+							s1, s2, s3, trap->kind->desc, coords);
 				}
 
 				prt(out_val, 0, 0);
@@ -581,7 +582,7 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 			boring = FALSE;
 
 			track_object(player->upkeep, floor_list[0]);
-			handle_stuff(player->upkeep);
+			handle_stuff(player);
 
 			/* If there is more than one item... */
 			if (floor_num > 1)
@@ -632,7 +633,7 @@ static ui_event target_set_interactive_aux(int y, int x, int mode)
 							}
 							if (0 <= pos && pos < floor_num) {
 								track_object(player->upkeep, floor_list[pos]);
-								handle_stuff(player->upkeep);
+								handle_stuff(player);
 								continue;
 							}
 							rdone = 1;
@@ -842,11 +843,11 @@ static int draw_path(u16b path_n, struct loc *path_g, wchar_t *c, int *a,
 			colour = COLOUR_YELLOW;
 
 		else if ((!square_isprojectable(cave, y,x) && square_ismark(cave, y, x))
-				 || player_can_see_bold(y, x))
+				 || square_isseen(cave, y, x))
 			/* Known walls are blue. */
 			colour = COLOUR_BLUE;
 
-		else if (!square_ismark(cave, y, x) && !player_can_see_bold(y,x))
+		else if (!square_ismark(cave, y, x) && !square_isseen(cave, y, x))
 			/* Unknown squares are grey. */
 			colour = COLOUR_L_DARK;
 
@@ -985,7 +986,7 @@ bool target_set_interactive(int mode, int x, int y)
 			x = targets->pts[m].x;
 
 			/* Adjust panel if needed */
-			if (adjust_panel_help(y, x, help)) handle_stuff(player->upkeep);
+			if (adjust_panel_help(y, x, help)) handle_stuff(player);
 		
 			/* Update help */
 			if (help) {
@@ -1101,7 +1102,7 @@ bool target_set_interactive(int mode, int x, int y)
 						verify_panel();
 
 						/* Handle stuff */
-						handle_stuff(player->upkeep);
+						handle_stuff(player);
 
 						y = player->py;
 						x = player->px;
@@ -1150,7 +1151,7 @@ bool target_set_interactive(int mode, int x, int y)
 						/* Redraw main window */
 						player->upkeep->redraw |= (PR_BASIC | PR_EXTRA | PR_MAP | PR_EQUIP);
 						Term_clear();
-						handle_stuff(player->upkeep);
+						handle_stuff(player);
 						if (!help)
 							prt("Press '?' for help.", help_prompt_loc, 0);
 					
@@ -1199,7 +1200,7 @@ bool target_set_interactive(int mode, int x, int y)
 						}
 
 						/* Handle stuff */
-						handle_stuff(player->upkeep);
+						handle_stuff(player);
 					}
 				}
 
@@ -1294,7 +1295,7 @@ bool target_set_interactive(int mode, int x, int y)
 					/* Adjust panel if needed */
 					if (adjust_panel_help(y, x, help)) {
 						/* Handle stuff */
-						handle_stuff(player->upkeep);
+						handle_stuff(player);
 
 						/* Recalculate interesting grids */
 						point_set_dispose(targets);
@@ -1341,7 +1342,7 @@ bool target_set_interactive(int mode, int x, int y)
 						verify_panel();
 
 						/* Handle stuff */
-						handle_stuff(player->upkeep);
+						handle_stuff(player);
 
 						y = player->py;
 						x = player->px;
@@ -1402,7 +1403,7 @@ bool target_set_interactive(int mode, int x, int y)
 						/* Redraw main window */
 						player->upkeep->redraw |= (PR_BASIC | PR_EXTRA | PR_MAP | PR_EQUIP);
 						Term_clear();
-						handle_stuff(player->upkeep);
+						handle_stuff(player);
 						if (!help)
 							prt("Press '?' for help.", help_prompt_loc, 0);
 					
@@ -1441,7 +1442,7 @@ bool target_set_interactive(int mode, int x, int y)
 				/* Adjust panel if needed */
 				if (adjust_panel_help(y, x, help)) {
 					/* Handle stuff */
-					handle_stuff(player->upkeep);
+					handle_stuff(player);
 
 					/* Recalculate interesting grids */
 					point_set_dispose(targets);
@@ -1468,7 +1469,7 @@ bool target_set_interactive(int mode, int x, int y)
 	verify_panel();
 
 	/* Handle stuff */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	mem_free(path_attr);
 	mem_free(path_char);

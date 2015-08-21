@@ -417,7 +417,8 @@ static void place_stairs(struct chunk *c, int y, int x, int feat)
 void place_random_stairs(struct chunk *c, int y, int x)
 {
     int feat = randint0(100) < 50 ? FEAT_LESS : FEAT_MORE;
-    if (square_canputitem(c, y, x)) place_stairs(c, y, x, feat);
+    if (square_canputitem(c, y, x) && !square_isplayertrap(c, y, x))
+		place_stairs(c, y, x, feat);
 }
 
 
@@ -456,9 +457,9 @@ void place_object(struct chunk *c, int y, int x, int level, bool good, bool grea
     } else {
 		if (new_obj->artifact)
 			c->good_item = TRUE;
-		if (rating > 250000)
-			rating = 250000; /* avoid overflows */
-		c->obj_rating += (rating / 10) * (rating / 10);
+		if (rating > 2500000)
+			rating = 2500000; /* avoid overflows */
+		c->obj_rating += (rating / 100) * (rating / 100);
     }
 }
 
@@ -683,7 +684,7 @@ static void vault_trap_aux(struct chunk *c, int y, int x, int yd, int xd)
 		find_nearby_grid(c, &y1, y, yd, &x1, x, xd);
 		if (!square_isempty(c, y1, x1)) continue;
 
-		place_trap(c, y1, x1, -1, c->depth);
+		square_add_trap(c, y1, x1);
 		break;
     }
 }

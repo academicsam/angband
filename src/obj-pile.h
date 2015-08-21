@@ -34,7 +34,7 @@ typedef enum
 } object_stack_t;
 
 struct object *object_new(void);
-void object_delete(struct object *obj);
+void object_delete(struct object **obj_address);
 void object_pile_free(struct object *obj);
 
 void pile_insert(struct object **pile, struct object *obj);
@@ -43,20 +43,21 @@ void pile_excise(struct object **pile, struct object *obj);
 struct object *pile_last_item(struct object *const pile);
 bool pile_contains(const struct object *top, const struct object *obj);
 
-bool object_stackable(const struct object *o_ptr, const struct object *j_ptr,
+bool object_stackable(const struct object *obj1, const struct object *obj2,
 					  object_stack_t mode);
-bool object_similar(const struct object *o_ptr, const struct object *j_ptr,
+bool object_similar(const struct object *obj1, const struct object *obj2,
 					object_stack_t mode);
-void object_absorb_partial(struct object *o_ptr, struct object *j_ptr);
-void object_absorb(struct object *o_ptr, struct object *j_ptr);
-void object_wipe(struct object *o_ptr);
-void object_copy(struct object *o_ptr, const struct object *j_ptr);
+void object_absorb_partial(struct object *obj1, struct object *obj2);
+void object_absorb(struct object *obj1, struct object *obj2);
+void object_wipe(struct object *obj);
+void object_copy(struct object *obj1, const struct object *obj2);
 void object_copy_amt(struct object *dest, struct object *src, int amt);
 struct object *object_split(struct object *src, int amt);
-struct object *floor_object_for_use(struct object *obj, int num, bool message);
+struct object *floor_object_for_use(struct object *obj, int num, bool message,
+									bool *none_left);
 bool floor_carry(struct chunk *c, int y, int x, struct object *drop, bool last);
-void drop_near(struct chunk *c, struct object *j_ptr, int chance, int y, int x,
-			   bool verbose);
+void drop_near(struct chunk *c, struct object *dropped, int chance, int y,
+			   int x, bool verbose);
 void push_object(int y, int x);
 void floor_item_charges(struct object *obj);
 int scan_floor(struct object **items, int max_size, int y, int x, int mode,

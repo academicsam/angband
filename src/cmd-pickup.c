@@ -35,6 +35,7 @@
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "player-attack.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-util.h"
 #include "trap.h"
@@ -82,7 +83,7 @@ static void player_pickup_gold(void)
 
 		/* Delete the gold */
 		square_excise_object(cave, player->py, player->px, obj);
-		object_delete(obj);
+		object_delete(&obj);
 		obj = next;
 	}
 
@@ -92,8 +93,7 @@ static void player_pickup_gold(void)
 
 		/* Build a message */
 		(void)strnfmt(buf, sizeof(buf),
-					  "You have found %ld gold pieces worth of ",
-					  (long)total_gold);
+					  "You have found %d gold pieces worth of ", total_gold);
 
 		/* One treasure type.. */
 		if (at_most_one)
@@ -156,7 +156,7 @@ static void player_pickup_aux(struct object *obj, bool domsg)
 
 	/* Carry the object */
 	square_excise_object(cave, player->py, player->px, obj);
-	inven_carry(player, obj, domsg);
+	inven_carry(player, obj, TRUE, domsg);
 }
 
 /**
@@ -185,7 +185,7 @@ static void player_pickup_aux(struct object *obj, bool domsg)
  * \param obj is the object to pick up.
  * \param menu is whether to present a menu to the player
  */
-static byte player_pickup_item(struct object *obj, bool menu)
+static byte player_pickup_item(bool menu)
 {
 	int py = player->py;
 	int px = player->px;
@@ -227,10 +227,6 @@ static byte player_pickup_item(struct object *obj, bool menu)
 	    return objs_picked_up;
 	}
 
-	/* Use the item that we are given, if it is on the floor. */
-	if (square_holds_object(cave, py, px, obj))
-		current = obj;
-
 	/* Use a menu interface for multiple objects, or pickup single objects */
 	if (!menu && !current) {
 		if (floor_num > 1)
@@ -242,21 +238,21 @@ static byte player_pickup_item(struct object *obj, bool menu)
 	/* Display a list if requested. */
 	if (menu && !current) {
 		const char *q, *s;
-		struct object *obj1;
+		struct object *obj = NULL;
 
 		/* Get an object or exit. */
 		q = "Get which item?";
 		s = "You see nothing there.";
-		if (!get_item(&obj1, q, s, CMD_PICKUP, inven_carry_okay, USE_FLOOR)) {
+		if (!get_item(&obj, q, s, CMD_PICKUP, inven_carry_okay, USE_FLOOR)) {
 			mem_free(floor_list);
 			return (objs_picked_up);
 		}
 
-		current = obj1;
+		current = obj;
 		call_function_again = TRUE;
 
 		/* With a list, we do not need explicit pickup messages */
-		domsg = FALSE;
+		domsg = TRUE;
 	}
 
 	/* Pick up object, if legal */
@@ -273,7 +269,7 @@ static byte player_pickup_item(struct object *obj, bool menu)
 	 * up.  Force the display of a menu in all cases.
 	 */
 	if (call_function_again)
-		objs_picked_up += player_pickup_item(NULL, TRUE);
+		objs_picked_up += player_pickup_item(TRUE);
 
 	mem_free(floor_list);
 
@@ -329,14 +325,10 @@ int do_autopickup(void)
  */
 void do_cmd_pickup(struct command *cmd)
 {
-	int energy_cost;
-	struct object *obj = square_object(cave, player->py, player->px);
-
-	/* Autopickup first */
-	energy_cost = do_autopickup() * z_info->move_energy / 10;
+	int energy_cost = 0;
 
 	/* Pick up floor objects with a menu for multiple objects */
-	energy_cost += player_pickup_item(obj, FALSE) * z_info->move_energy / 10;
+	energy_cost += player_pickup_item(FALSE) * z_info->move_energy / 10;
 
 	/* Limit */
 	if (energy_cost > z_info->move_energy) energy_cost = z_info->move_energy;

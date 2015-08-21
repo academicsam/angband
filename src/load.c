@@ -36,12 +36,12 @@
 #include "obj-slays.h"
 #include "obj-util.h"
 #include "object.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-quest.h"
 #include "player-spell.h"
 #include "player-timed.h"
 #include "player-util.h"
-#include "player.h"
 #include "savefile.h"
 #include "store.h"
 #include "trap.h"
@@ -112,7 +112,8 @@ static struct object *rd_item(void)
 
 	rd_u16b(&tmp16u);
 	rd_byte(&ver);
-	assert(tmp16u == 0xffff);
+	if (tmp16u != 0xffff)
+		return NULL;
 
 	/* Location */
 	rd_byte(&obj->iy);
@@ -229,13 +230,13 @@ static struct object *rd_item(void)
 
 	/* Check we have a kind and a valid artifact index */
 	if (!obj->tval || !obj->kind || art_idx >= z_info->a_max) {
-		object_delete(obj);
+		object_delete(&obj);
 		return NULL;
 	}
 
 	/* Lookup ego, set effect */
 	obj->ego = lookup_ego(ego_idx);
-	if (obj->ego)
+	if (obj->ego && obj->ego->effect)
 		obj->effect = obj->ego->effect;
 	else
 		obj->effect = obj->kind->effect;
@@ -251,9 +252,10 @@ static struct object *rd_item(void)
 /**
  * Read a monster
  */
-static void rd_monster(monster_type *mon)
+static bool rd_monster(struct chunk *c, struct monster *mon)
 {
 	byte tmp8u;
+	u16b tmp16u;
 	s16b r_idx;
 	size_t j;
 
@@ -283,9 +285,20 @@ static void rd_monster(monster_type *mon)
 	for (j = 0; j < elem_max; j++)
 		rd_s16b(&mon->known_pstate.el_info[j].res_level);
 
-	rd_byte(&tmp8u);
-	if (tmp8u)
-		mon->mimicked_obj = rd_item();
+	rd_u16b(&tmp16u);
+
+	if (tmp16u) {
+		/* Find and set the mimicked object */
+		struct object *square_obj = square_object(c, mon->fy, mon->fx);
+
+		while (square_obj) {
+			if (square_obj->mimicking_m_idx == tmp16u) break;
+			square_obj = square_obj->next;
+		}
+		if (!square_obj)
+			return FALSE;
+		mon->mimicked_obj = square_obj;
+	}
 
 	/* Read all the held objects (order is unimportant) */
 	while (TRUE) {
@@ -295,6 +308,8 @@ static void rd_monster(monster_type *mon)
 
 		pile_insert(&mon->held_obj, obj);
 	}
+
+	return TRUE;
 }
 
 
@@ -444,7 +459,7 @@ int rd_monster_memory(void)
 
 	/* Reset maximum numbers per level */
 	for (i = 1; z_info && i < z_info->r_max; i++) {
-		monster_race *race = &r_info[i];
+		struct monster_race *race = &r_info[i];
 		race->max_num = 100;
 		if (rf_has(race->flags, RF_UNIQUE))
 			race->max_num = 1;
@@ -452,7 +467,7 @@ int rd_monster_memory(void)
 
 	rd_string(buf, sizeof(buf));
 	while (!streq(buf, "No more monsters")) {
-		monster_race *race = lookup_monster(buf);
+		struct monster_race *race = lookup_monster(buf);
 
 		/* Get the kill count, skip if monster invalid */
 		rd_u16b(&tmp16u);
@@ -516,16 +531,16 @@ int rd_object_memory(void)
 	/* Read the object memory */
 	for (i = 0; i < tmp16u; i++) {
 		byte tmp8u;
-		object_kind *k_ptr = &k_info[i];
+		struct object_kind *kind = &k_info[i];
 
 		rd_byte(&tmp8u);
 
-		k_ptr->aware = (tmp8u & 0x01) ? TRUE : FALSE;
-		k_ptr->tried = (tmp8u & 0x02) ? TRUE : FALSE;
-		k_ptr->everseen = (tmp8u & 0x08) ? TRUE : FALSE;
+		kind->aware = (tmp8u & 0x01) ? TRUE : FALSE;
+		kind->tried = (tmp8u & 0x02) ? TRUE : FALSE;
+		kind->everseen = (tmp8u & 0x08) ? TRUE : FALSE;
 
-		if (tmp8u & 0x04) kind_ignore_when_aware(k_ptr);
-		if (tmp8u & 0x10) kind_ignore_when_unaware(k_ptr);
+		if (tmp8u & 0x04) kind_ignore_when_aware(kind);
+		if (tmp8u & 0x10) kind_ignore_when_unaware(kind);
 	}
 
 	return 0;
@@ -537,22 +552,23 @@ int rd_quests(void)
 {
 	int i;
 	u16b tmp16u;
-	
+
 	/* Load the Quests */
 	rd_u16b(&tmp16u);
 	if (tmp16u > z_info->quest_max) {
 		note(format("Too many (%u) quests!", tmp16u));
 		return (-1);
 	}
-	
+
 	/* Load the Quests */
 	player_quests_reset(player);
 	for (i = 0; i < tmp16u; i++) {
+		u16b cur_num;
 		rd_byte(&player->quests[i].level);
-		rd_u16b(&tmp16u);
-		player->quests[i].cur_num = tmp16u;
+		rd_u16b(&cur_num);
+		player->quests[i].cur_num = cur_num;
 	}
-	
+
 	return 0;
 }
 
@@ -635,7 +651,11 @@ int rd_player(void)
 
 	/* Read the stat info */
 	rd_byte(&stat_max);
-	assert(stat_max <= STAT_MAX);
+	if (stat_max > STAT_MAX) {
+		note(format("Too many stats (%d).", stat_max));
+		return -1;
+	}
+
 	for (i = 0; i < stat_max; i++) rd_s16b(&player->stat_max[i]);
 	for (i = 0; i < stat_max; i++) rd_s16b(&player->stat_cur[i]);
 	for (i = 0; i < stat_max; i++) rd_s16b(&player->stat_birth[i]);
@@ -929,8 +949,8 @@ static int rd_gear_aux(rd_item_t rd_item_version, struct object **gear)
 		player->upkeep->total_weight += (obj->number * obj->weight);
 
 		/* If it's equipment, wield it */
-		if (code == EQUIP_CODE) {
-			player->body.slots[wield_slot(obj)].obj = obj;
+		if (code < player->body.count) {
+			player->body.slots[code].obj = obj;
 			player->upkeep->equip_cnt++;
 		}
 
@@ -994,8 +1014,12 @@ static int rd_stores_aux(rd_item_t rd_item_version)
 			}
 
 			/* Accept any valid items */
-			if (store->stock_num < z_info->store_inven_max && obj->kind)
-				store_carry(store, obj);
+			if (store->stock_num < z_info->store_inven_max && obj->kind) {
+				if (store->sidx == STORE_HOME)
+					home_carry(obj);
+				else
+					store_carry(store, obj);
+			}
 		}
 	}
 
@@ -1153,15 +1177,18 @@ static int rd_monsters_aux(struct chunk *c)
 
 	/* Read the monsters */
 	for (i = 1; i < limit; i++) {
-		monster_type *mon;
-		monster_type monster_type_body;
+		struct monster *mon;
+		struct monster monster_body;
 
 		/* Get local monster */
-		mon = &monster_type_body;
+		mon = &monster_body;
 		memset(mon, 0, sizeof(*mon));
 
 		/* Read the monster */
-		rd_monster(mon);
+		if (!rd_monster(c, mon)) {
+			note(format("Cannot read monster %d", i));
+			return (-1);
+		}
 
 		/* Place monster in dungeon */
 		if (place_monster(c, mon->fy, mon->fx, mon, 0) != i) {
@@ -1236,6 +1263,7 @@ int rd_dungeon(void)
 
 	/* Load player depth */
 	player->depth = depth;
+	cave->depth = depth;
 
 	/* Place player in dungeon */
 	player_place(cave, player, py, px);

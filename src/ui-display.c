@@ -33,6 +33,7 @@
 #include "obj-gear.h"
 #include "obj-pile.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "player-util.h"
 #include "player.h"
@@ -84,6 +85,7 @@ static game_event_type statusline_events[] =
 	EVENT_STATUS,
 	EVENT_DETECTIONSTATUS,
 	EVENT_STATE,
+	EVENT_FEELING,
 };
 
 /**
@@ -219,7 +221,7 @@ static void prt_exp(int row, int col)
 			player->exp;
 
 	/* Format XP */
-	strnfmt(out_val, sizeof(out_val), "%8ld", (long)xp);
+	strnfmt(out_val, sizeof(out_val), "%8d", xp);
 
 
 	if (player->exp >= player->max_exp) {
@@ -240,7 +242,7 @@ static void prt_gold(int row, int col)
 	char tmp[32];
 
 	put_str("AU ", row, col);
-	strnfmt(tmp, sizeof(tmp), "%9ld", (long)player->au);
+	strnfmt(tmp, sizeof(tmp), "%9d", player->au);
 	c_put_str(COLOUR_L_GREEN, tmp, row, col + 3);
 }
 
@@ -318,8 +320,10 @@ static void prt_sp(int row, int col)
 	char cur_sp[32], max_sp[32];
 	byte color = player_sp_attr(player);
 
-	/* Do not show mana unless we have some */
-	if (!player->msp) return;
+	/* Do not show mana unless we should have some */
+	if (player_has(player, PF_NO_MANA) || 
+		(player->lev < player->class->magic.spell_first))
+		return;
 
 	put_str("SP ", row, col);
 
@@ -817,6 +821,112 @@ static size_t prt_state(int row, int col)
 	return strlen(text);
 }
 
+static const byte obj_feeling_color[] = 
+{
+	/* Colors used to display each obj feeling 	*/
+	COLOUR_WHITE,  /* "Looks like any other level." */
+	COLOUR_L_PURPLE, /* "you sense an item of wondrous power!" */
+	COLOUR_L_RED, /* "there are superb treasures here." */
+	COLOUR_ORANGE, /* "there are excellent treasures here." */
+	COLOUR_YELLOW, /* "there are very good treasures here." */
+	COLOUR_YELLOW, /* "there are good treasures here." */
+	COLOUR_L_GREEN, /* "there may be something worthwhile here." */
+	COLOUR_L_GREEN, /* "there may not be much interesting here." */
+	COLOUR_L_GREEN, /* "there aren't many treasures here." */
+	COLOUR_L_BLUE, /* "there are only scraps of junk here." */
+	COLOUR_L_BLUE  /* "there are naught but cobwebs here. */
+};
+
+static const byte mon_feeling_color[] = 
+{
+	/* Colors used to display each monster feeling */
+	COLOUR_WHITE, /* "You are still uncertain about this place" */
+	COLOUR_RED, /* "Omens of death haunt this place" */
+	COLOUR_ORANGE, /* "This place seems murderous" */
+	COLOUR_ORANGE, /* "This place seems terribly dangerous" */
+	COLOUR_YELLOW, /* "You feel anxious about this place" */
+	COLOUR_YELLOW, /* "You feel nervous about this place" */
+	COLOUR_GREEN, /* "This place does not seem too risky" */
+	COLOUR_GREEN, /* "This place seems reasonably safe" */
+	COLOUR_BLUE, /* "This seems a tame, sheltered place" */
+	COLOUR_BLUE, /* "This seems a quiet, peaceful place" */
+};
+
+/**
+ * Prints level feelings at status if they are enabled.
+ */
+static size_t prt_level_feeling(int row, int col) 
+{
+	u16b obj_feeling;
+	u16b mon_feeling;
+	char obj_feeling_str[6];
+	char mon_feeling_str[6];
+	int new_col;
+	byte obj_feeling_color_print;
+
+	/* Don't show feelings for cold-hearted characters */
+	if (OPT(birth_no_feelings)) return 0;
+
+	/* No useful feeling in town */
+	if (!player->depth) return 0;
+
+	/* Get feelings */
+	obj_feeling = cave->feeling / 10;
+	mon_feeling = cave->feeling - (10 * obj_feeling);
+
+	/* 
+	 *   Convert object feeling to a symbol easier to parse
+	 * for a human.
+	 *   0 -> * "Looks like any other level."
+	 *   1 -> $ "you sense an item of wondrous power!" (special feeling)
+	 *   2 to 10 are feelings from 2 meaning superb feeling to 10
+	 * meaning naught but cowebs.
+	 *   It is easier for the player to have poor feelings as a
+	 * low number and superb feelings as a higher one. So for
+	 * display we reverse this numbers and substract 1.
+	 *   Thus (2-10) becomes (1-9 reversed)
+	 *
+	 *   But before that check if the player has explored enough
+	 * to get a feeling. If not display as ?
+	 */
+	if (cave->feeling_squares < z_info->feeling_need) {
+		my_strcpy(obj_feeling_str, "?", sizeof(obj_feeling_str));
+		obj_feeling_color_print = COLOUR_WHITE;
+	} else {
+		obj_feeling_color_print = obj_feeling_color[obj_feeling];
+		if (obj_feeling == 0)
+			my_strcpy(obj_feeling_str, "*", sizeof(obj_feeling_str));
+		else if (obj_feeling == 1)
+			my_strcpy(obj_feeling_str, "$", sizeof(obj_feeling_str));
+		else
+			strnfmt(obj_feeling_str, 5, "%d", (unsigned int) (11-obj_feeling));
+	}
+
+	/* 
+	 *   Convert monster feeling to a symbol easier to parse
+	 * for a human.
+	 *   0 -> ? . Monster feeling should never be 0, but we check
+	 * it just in case.
+	 *   1 to 9 are feelings from omens of death to quiet, paceful.
+	 * We also reverse this so that what we show is a danger feeling.
+	 */
+	if (mon_feeling == 0)
+		my_strcpy( mon_feeling_str, "?", sizeof(mon_feeling_str) );
+	else
+		strnfmt(mon_feeling_str, 5, "%d", (unsigned int) ( 10-mon_feeling ));
+
+	/* Display it */
+	c_put_str(COLOUR_WHITE, "LF:", row, col);
+	new_col = col + 3;
+	c_put_str(mon_feeling_color[mon_feeling], mon_feeling_str, row, new_col);
+	new_col += strlen( mon_feeling_str );
+	c_put_str(COLOUR_WHITE, "-", row, new_col);
+	++new_col;
+	c_put_str(obj_feeling_color_print, obj_feeling_str,	row, new_col);
+	new_col += strlen( obj_feeling_str ) + 1;
+
+	return new_col - col;
+}
 
 /**
  * Prints trap detection status
@@ -899,8 +1009,8 @@ static size_t prt_unignore(int row, int col)
 typedef size_t status_f(int row, int col);
 
 static status_f *status_handlers[] =
-{ prt_unignore, prt_recall, prt_state, prt_cut, prt_stun,
-  prt_hunger, prt_study, prt_tmd, prt_dtrap };
+{ prt_level_feeling, prt_unignore, prt_recall, prt_state, prt_cut, 
+  prt_stun, prt_hunger, prt_study, prt_tmd, prt_dtrap };
 
 
 /**
@@ -950,7 +1060,7 @@ static void update_maps(game_event_type type, game_event_data *data, void *user)
 
 	/* Single point to be redrawn */
 	else {
-		grid_data g;
+		struct grid_data g;
 		int a, ta;
 		wchar_t c, tc;
 
@@ -1068,21 +1178,20 @@ static void do_animation(void)
 {
 	int i;
 
-	for (i = 1; i < cave_monster_max(cave); i++)
-	{
+	for (i = 1; i < cave_monster_max(cave); i++) {
 		byte attr;
-		monster_type *m_ptr = cave_monster(cave, i);
+		struct monster *mon = cave_monster(cave, i);
 
-		if (!m_ptr || !m_ptr->race || !mflag_has(m_ptr->mflag, MFLAG_VISIBLE))
+		if (!mon || !mon->race || !mflag_has(mon->mflag, MFLAG_VISIBLE))
 			continue;
-		else if (rf_has(m_ptr->race->flags, RF_ATTR_MULTI))
+		else if (rf_has(mon->race->flags, RF_ATTR_MULTI))
 			attr = randint1(BASIC_COLORS - 1);
-		else if (rf_has(m_ptr->race->flags, RF_ATTR_FLICKER))
-			attr = get_flicker(monster_x_attr[m_ptr->race->ridx]);
+		else if (rf_has(mon->race->flags, RF_ATTR_FLICKER))
+			attr = get_flicker(monster_x_attr[mon->race->ridx]);
 		else
 			continue;
 
-		m_ptr->attr = attr;
+		mon->attr = attr;
 		player->upkeep->redraw |= (PR_MAP | PR_MONLIST);
 	}
 
@@ -1104,13 +1213,15 @@ static void animate(game_event_type type, game_event_data *data, void *user)
  */
 void idle_update(void)
 {
+	if (msg_flag) return;
+
 	if (!character_dungeon) return;
 
 	if (!OPT(animate_flicker) || (use_graphics != GRAPHICS_NONE)) return;
 
 	/* Animate and redraw if necessary */
 	do_animation();
-	redraw_stuff(player->upkeep);
+	redraw_stuff(player);
 
 	/* Refresh the main screen */
 	Term_fresh();
@@ -1168,6 +1279,7 @@ static void display_explosion(game_event_type type, game_event_data *data,
 	int gf_type = data->explosion.gf_type;
 	int num_grids = data->explosion.num_grids;
 	int *distance_to_grid = data->explosion.distance_to_grid;
+	bool drawing = data->explosion.drawing;
 	bool *player_sees_grid = data->explosion.player_sees_grid;
 	struct loc *blast_grid = data->explosion.blast_grid;
 	struct loc centre = data->explosion.centre;
@@ -1206,10 +1318,10 @@ static void display_explosion(game_event_type type, game_event_data *data,
 			/* Flush all the grids at this radius */
 			Term_fresh();
 			if (player->upkeep->redraw)
-				redraw_stuff(player->upkeep);
+				redraw_stuff(player);
 
 			/* Delay to show this radius appearing */
-			if (drawn) {
+			if (drawn || drawing) {
 				Term_xtra(TERM_XTRA_DELAY, msec);
 			}
 
@@ -1236,7 +1348,7 @@ static void display_explosion(game_event_type type, game_event_data *data,
 		/* Flush the explosion */
 		Term_fresh();
 		if (player->upkeep->redraw)
-			redraw_stuff(player->upkeep);
+			redraw_stuff(player);
 	}
 }
 
@@ -1248,15 +1360,13 @@ static void display_bolt(game_event_type type, game_event_data *data,
 {
 	int msec = op_ptr->delay_factor;
 	int gf_type = data->bolt.gf_type;
+	bool drawing = data->bolt.drawing;
 	bool seen = data->bolt.seen;
 	bool beam = data->bolt.beam;
 	int oy = data->bolt.oy;
 	int ox = data->bolt.ox;
 	int y = data->bolt.y;
 	int x = data->bolt.x;
-
-	/* Assume the player has seen nothing */
-	bool visual = FALSE;
 
 	/* Only do visuals if the player can "see" the bolt */
 	if (seen) {
@@ -1271,12 +1381,12 @@ static void display_bolt(game_event_type type, game_event_data *data,
 		move_cursor_relative(y, x);
 		Term_fresh();
 		if (player->upkeep->redraw)
-			redraw_stuff(player->upkeep);
+			redraw_stuff(player);
 		Term_xtra(TERM_XTRA_DELAY, msec);
 		event_signal_point(EVENT_MAP, x, y);
 		Term_fresh();
 		if (player->upkeep->redraw)
-			redraw_stuff(player->upkeep);
+			redraw_stuff(player);
 
 		/* Display "beam" grids */
 		if (beam) {
@@ -1287,13 +1397,7 @@ static void display_bolt(game_event_type type, game_event_data *data,
 			/* Visual effects */
 			print_rel(c, a, y, x);
 		}
-
-		/* Hack -- Activate delay */
-		visual = TRUE;
-	}
-
-	/* Hack -- delay anyway for consistency */
-	else if (visual) {
+	} else if (drawing) {
 		/* Delay for consistency */
 		Term_xtra(TERM_XTRA_DELAY, msec);
 	}
@@ -1317,16 +1421,13 @@ static void display_missile(game_event_type type, game_event_data *data,
 		move_cursor_relative(y, x);
 
 		Term_fresh();
-		if (player->upkeep->redraw) redraw_stuff(player->upkeep);
+		if (player->upkeep->redraw) redraw_stuff(player);
 
 		Term_xtra(TERM_XTRA_DELAY, msec);
 		event_signal_point(EVENT_MAP, x, y);
 
 		Term_fresh();
-		if (player->upkeep->redraw) redraw_stuff(player->upkeep);
-	} else {
-		/* Delay anyway for consistency */
-		Term_xtra(TERM_XTRA_DELAY, msec);
+		if (player->upkeep->redraw) redraw_stuff(player);
 	}
 }
 
@@ -1961,9 +2062,10 @@ static void splashscreen_note(game_event_type type, game_event_data *data,
 		/* Advance one line (wrap if needed) */
 		if (++y >= 24) y = 2;
 	} else {
-		Term_erase(0, 23, 255);
-		Term_putstr(20, 23, -1, COLOUR_WHITE,
-					format("[%s]", data->message.msg));
+		char *s = format("[%s]", data->message.msg);
+		Term_erase(0, (Term->hgt - 23) / 5 + 23, 255);
+		Term_putstr((Term->wid - strlen(s)) / 2, (Term->hgt - 23) / 5 + 23, -1,
+					COLOUR_WHITE, s);
 	}
 
 	Term_fresh();
@@ -1977,7 +2079,7 @@ static void show_splashscreen(game_event_type type, game_event_data *data,
 	char buf[1024];
 
 	/* Verify the "news" file */
-	path_build(buf, sizeof(buf), ANGBAND_DIR_FILE, "news.txt");
+	path_build(buf, sizeof(buf), ANGBAND_DIR_SCREENS, "news.txt");
 	if (!file_exists(buf)) {
 		char why[1024];
 
@@ -1991,13 +2093,17 @@ static void show_splashscreen(game_event_type type, game_event_data *data,
 	Term_clear();
 
 	/* Open the News file */
-	path_build(buf, sizeof(buf), ANGBAND_DIR_FILE, "news.txt");
+	path_build(buf, sizeof(buf), ANGBAND_DIR_SCREENS, "news.txt");
 	fp = file_open(buf, MODE_READ, FTYPE_TEXT);
 
 	text_out_hook = text_out_to_screen;
 
 	/* Dump */
 	if (fp) {
+		/* Centre the splashscreen - assume news.txt has width 80, height 23 */
+		text_out_indent = (Term->wid - 80) / 2;
+		Term_gotoxy(0, (Term->hgt - 23) / 5);
+
 		/* Dump the file to the screen */
 		while (file_getl(fp, buf, sizeof(buf))) {
 			char *version_marker = strstr(buf, "$VERSION");
@@ -2010,6 +2116,7 @@ static void show_splashscreen(game_event_type type, game_event_data *data,
 			text_out("\n");
 		}
 
+		text_out_indent = 0;
 		file_close(fp);
 	}
 
@@ -2054,13 +2161,6 @@ static void new_level_display_update(game_event_type type,
 	Term->offset_y = z_info->dungeon_hgt;
 	Term->offset_x = z_info->dungeon_wid;
 
-
-	/*
-	 * Because changing levels doesn't take a turn and PR_MONLIST might not be
-	 * set for a few game turns, manually force an update on level change.
-	 */
-	monster_list_force_subwindow_update();
-
 	/* If autosave is pending, do it now. */
 	if (player->upkeep->autosave) {
 		save_game();
@@ -2077,13 +2177,13 @@ static void new_level_display_update(game_event_type type,
 	Term_clear();
 
 	/* Update stuff */
-	player->upkeep->update |= (PU_BONUS | PU_HP | PU_MANA | PU_SPELLS);
+	player->upkeep->update |= (PU_BONUS | PU_HP | PU_SPELLS);
 
 	/* Calculate torch radius */
 	player->upkeep->update |= (PU_TORCH);
 
 	/* Update stuff */
-	update_stuff(player->upkeep);
+	update_stuff(player);
 
 	/* Fully update the visuals (and monster distances) */
 	player->upkeep->update |= (PU_FORGET_VIEW | PU_UPDATE_VIEW | PU_DISTANCE);
@@ -2097,11 +2197,15 @@ static void new_level_display_update(game_event_type type,
 	/* Redraw "statusy" things */
 	player->upkeep->redraw |= (PR_INVEN | PR_EQUIP | PR_MONSTER | PR_MONLIST | PR_ITEMLIST);
 
+	/* Because changing levels doesn't take a turn and PR_MONLIST might not be
+	 * set for a few game turns, manually force an update on level change. */
+	monster_list_force_subwindow_update();
+
 	/* Update stuff */
-	update_stuff(player->upkeep);
+	update_stuff(player);
 
 	/* Redraw stuff */
-	redraw_stuff(player->upkeep);
+	redraw_stuff(player);
 
 	/* Hack -- Kill partial update mode */
 	player->upkeep->only_partial = FALSE;
@@ -2201,7 +2305,7 @@ static void see_floor_items(game_event_type type, game_event_data *data,
 		for (i = 0; i < floor_num; i++) {
 			/* Since the messages are detailed, we use MARK_SEEN to match
 			 * description. */
-			object_type *obj = floor_list[i];
+			struct object *obj = floor_list[i];
 			obj->marked = MARK_SEEN;
 		}
 	}
@@ -2220,6 +2324,9 @@ static void process_character_pref_files(void)
 {
 	bool found;
 	char buf[1024];
+
+	/* Process the "window.prf" file */
+	process_pref_file("window.prf", TRUE, TRUE);
 
 	/* Process the "user.prf" file */
 	process_pref_file("user.prf", TRUE, TRUE);
@@ -2262,19 +2369,19 @@ static void ui_leave_init(game_event_type type, game_event_data *data,
 	/* Flash a message */
 	prt("Please wait...", 0, 0);
 
-	/* Allow big cursor */
-	smlcurs = FALSE;
-
 	/* Flush the message */
 	Term_fresh();
 }
 
-static void ui_enter_game(game_event_type type, game_event_data *data,
+static void ui_enter_world(game_event_type type, game_event_data *data,
 						  void *user)
 {
+	/* Allow big cursor */
+	smlcurs = FALSE;
+
 	/* Redraw stuff */
 	player->upkeep->redraw |= (PR_INVEN | PR_EQUIP | PR_MONSTER | PR_MESSAGE);
-	redraw_stuff(player->upkeep);
+	redraw_stuff(player);
 
 	/* React to changes */
 	Term_xtra(TERM_XTRA_REACT, 0);
@@ -2316,18 +2423,6 @@ static void ui_enter_game(game_event_type type, game_event_data *data,
 	/* Display a physical missile */
 	event_add_handler(EVENT_MISSILE, display_missile, NULL);
 
-	/* Display a message to the player */
-	event_add_handler(EVENT_MESSAGE, display_message, NULL);
-
-	/* Display a message and make a noise to the player */
-	event_add_handler(EVENT_BELL, bell_message, NULL);
-
-	/* Tell the UI to ignore all pending input */
-	event_add_handler(EVENT_INPUT_FLUSH, flush, NULL);
-
-	/* Print all waiting messages */
-	event_add_handler(EVENT_MESSAGE_FLUSH, message_flush, NULL);
-
 	/* Check to see if the player has tried to cancel game processing */
 	event_add_handler(EVENT_CHECK_INTERRUPT, check_for_player_interrupt, NULL);
 
@@ -2350,7 +2445,7 @@ static void ui_enter_game(game_event_type type, game_event_data *data,
 	screen_save_depth--;
 }
 
-static void ui_leave_game(game_event_type type, game_event_data *data,
+static void ui_leave_world(game_event_type type, game_event_data *data,
 						  void *user)
 {
 	/* Disallow big cursor */
@@ -2390,18 +2485,6 @@ static void ui_leave_game(game_event_type type, game_event_data *data,
 	/* Display a physical missile */
 	event_remove_handler(EVENT_MISSILE, display_missile, NULL);
 
-	/* Display a message to the player */
-	event_remove_handler(EVENT_MESSAGE, display_message, NULL);
-
-	/* Display a message and make a noise to the player */
-	event_remove_handler(EVENT_BELL, bell_message, NULL);
-
-	/* Tell the UI to ignore all pending input */
-	event_remove_handler(EVENT_INPUT_FLUSH, flush, NULL);
-
-	/* Print all waiting messages */
-	event_remove_handler(EVENT_MESSAGE_FLUSH, message_flush, NULL);
-
 	/* Check to see if the player has tried to cancel game processing */
 	event_remove_handler(EVENT_CHECK_INTERRUPT, check_for_player_interrupt, NULL);
 
@@ -2420,11 +2503,46 @@ static void ui_leave_game(game_event_type type, game_event_data *data,
 	/* Allow the player to cheat death, if appropriate */
 	event_remove_handler(EVENT_CHEAT_DEATH, cheat_death, NULL);
 
+	/* Prepare to interact with a store */
+	event_add_handler(EVENT_USE_STORE, use_store, NULL);
+
 	/* If we've gone into a store, we need to know how to leave */
 	event_add_handler(EVENT_LEAVE_STORE, leave_store, NULL);
 
 	/* Hack -- Increase "icky" depth */
 	screen_save_depth++;
+}
+
+static void ui_enter_game(game_event_type type, game_event_data *data,
+						  void *user)
+{
+	/* Display a message to the player */
+	event_add_handler(EVENT_MESSAGE, display_message, NULL);
+
+	/* Display a message and make a noise to the player */
+	event_add_handler(EVENT_BELL, bell_message, NULL);
+
+	/* Tell the UI to ignore all pending input */
+	event_add_handler(EVENT_INPUT_FLUSH, flush, NULL);
+
+	/* Print all waiting messages */
+	event_add_handler(EVENT_MESSAGE_FLUSH, message_flush, NULL);
+}
+
+static void ui_leave_game(game_event_type type, game_event_data *data,
+						  void *user)
+{
+	/* Display a message to the player */
+	event_remove_handler(EVENT_MESSAGE, display_message, NULL);
+
+	/* Display a message and make a noise to the player */
+	event_remove_handler(EVENT_BELL, bell_message, NULL);
+
+	/* Tell the UI to ignore all pending input */
+	event_remove_handler(EVENT_INPUT_FLUSH, flush, NULL);
+
+	/* Print all waiting messages */
+	event_remove_handler(EVENT_MESSAGE_FLUSH, message_flush, NULL);
 }
 
 void init_display(void)
@@ -2434,6 +2552,9 @@ void init_display(void)
 
 	event_add_handler(EVENT_ENTER_GAME, ui_enter_game, NULL);
 	event_add_handler(EVENT_LEAVE_GAME, ui_leave_game, NULL);
+
+	event_add_handler(EVENT_ENTER_WORLD, ui_enter_world, NULL);
+	event_add_handler(EVENT_LEAVE_WORLD, ui_leave_world, NULL);
 
 	ui_init_birthstate_handlers();
 }

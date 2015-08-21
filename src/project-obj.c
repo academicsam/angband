@@ -27,6 +27,7 @@
 #include "obj-pile.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 
 /**
  * Destroys a type of item on a given percent chance.
@@ -109,6 +110,7 @@ int inven_damage(struct player *p, int type, int cperc)
 			/* Some casualities */
 			if (amt) {
 				struct object *destroyed;
+				bool none_left = FALSE;
 
 				/* Get a description */
 				object_desc(o_name, sizeof(o_name), obj, ODESC_BASE);
@@ -130,8 +132,8 @@ int inven_damage(struct player *p, int type, int cperc)
 				reduce_charges(obj, amt);
 
 				/* Destroy "amt" items */
-				destroyed = gear_object_for_use(obj, 1, FALSE);
-				object_delete(destroyed);
+				destroyed = gear_object_for_use(obj, amt, FALSE, &none_left);
+				object_delete(&destroyed);
 
 				/* Count the casualties */
 				k += amt;
@@ -335,10 +337,10 @@ static void project_object_handler_KILL_DOOR(project_object_handler_context_t *c
 	/* Chests are noticed only if trapped or locked */
 	if (is_locked_chest(context->obj)) {
 		/* Disarm or Unlock */
-		unlock_chest((object_type * const)context->obj);
+		unlock_chest((struct object * const)context->obj);
 
 		/* Identify */
-		object_notice_everything((object_type * const)context->obj);
+		object_notice_everything((struct object * const)context->obj);
 
 		/* Notice */
 		if (context->obj->marked > MARK_UNAWARE && !ignore_item_ok(context->obj)) {
@@ -354,10 +356,10 @@ static void project_object_handler_KILL_TRAP(project_object_handler_context_t *c
 	/* Chests are noticed only if trapped or locked */
 	if (is_locked_chest(context->obj)) {
 		/* Disarm or Unlock */
-		unlock_chest((object_type * const)context->obj);
+		unlock_chest((struct object * const)context->obj);
 
 		/* Identify */
-		object_notice_everything((object_type * const)context->obj);
+		object_notice_everything((struct object * const)context->obj);
 
 		/* Notice */
 		if (context->obj->marked > MARK_UNAWARE && !ignore_item_ok(context->obj)) {
@@ -379,10 +381,10 @@ static const project_object_handler_f object_handlers[] = {
 	#define ELEM(a, b, c, d, e, f, g, h, i, col) project_object_handler_##a,
 	#include "list-elements.h"
 	#undef ELEM
-	#define PROJ_ENV(a, col) project_object_handler_##a,
+	#define PROJ_ENV(a, col, desc) project_object_handler_##a,
 	#include "list-project-environs.h"
 	#undef PROJ_ENV
-	#define PROJ_MON(a, obv) NULL, 
+	#define PROJ_MON(a, obv, desc) NULL, 
 	#include "list-project-monsters.h"
 	#undef PROJ_MON
 	NULL
@@ -467,7 +469,7 @@ bool project_o(int who, int r, int y, int x, int dam, int typ)
 
 				/* Delete the object */
 				square_excise_object(cave, y, x, obj);
-				object_delete(obj);
+				object_delete(&obj);
 
 				/* Redraw */
 				square_light_spot(cave, y, x);

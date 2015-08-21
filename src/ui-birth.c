@@ -97,8 +97,9 @@ static bool quickstart_allowed = FALSE;
  * Quickstart? screen.
  * ------------------------------------------------------------------------ */
 static enum birth_stage textui_birth_quickstart(void)
+//phantom name change changes
 {
-	const char *prompt = "['Y' to use this character, 'N' to start afresh, 'C' to change name]";
+	const char *prompt = "['Y' to use this character, 'N' to start afresh, 'C' to change name or history]";
 
 	enum birth_stage next = BIRTH_QUICKSTART;
 
@@ -115,7 +116,7 @@ static enum birth_stage textui_birth_quickstart(void)
 			next = BIRTH_RACE_CHOICE;
 		} else if (ke.code == KTRL('X')) {
 			quit(NULL);
-		} else if (ke.code == 'C' || ke.code == 'c') {
+		} else if ( !arg_force_name && (ke.code == 'C' || ke.code == 'c')) {
 			next = BIRTH_NAME_CHOICE;
 		} else if (ke.code == 'Y' || ke.code == 'y') {
 			cmdq_push(CMD_ACCEPT_CHARACTER);
@@ -465,7 +466,7 @@ static void setup_menus(void)
 
 	for (i = 0, r = races; r; r = r->next, i++)
 		mdata->items[r->ridx] = r->name;
-	mdata->hint = "Your 'race' determines various intrinsic factors and bonuses.";
+	mdata->hint = "Race affects stats and skills, and may confer resistances and abilities.";
 
 	/* Count the classes */
 	n = 0;
@@ -478,7 +479,7 @@ static void setup_menus(void)
 
 	for (i = 0, c = classes; c; c = c->next, i++)
 		mdata->items[c->cidx] = c->name;
-	mdata->hint = "Your 'class' determines various intrinsic abilities and bonuses";
+	mdata->hint = "Class affects stats, skills, and other character traits.";
 		
 	/* Roller menu straightforward */
 	init_birth_menu(&roller_menu, MAX_BIRTH_ROLLERS, 0, &roller_region, FALSE,
@@ -486,7 +487,7 @@ static void setup_menus(void)
 	mdata = roller_menu.menu_data;
 	for (i = 0; i < MAX_BIRTH_ROLLERS; i++)
 		mdata->items[i] = roller_choices[i];
-	mdata->hint = "Your choice of character generation.  Point-based is recommended.";
+	mdata->hint = "Choose how to generate your intrinsic stats. Point-based is recommended.";
 }
 
 /**
@@ -524,11 +525,11 @@ static void clear_question(void)
 
 
 #define BIRTH_MENU_HELPTEXT \
-	"{light blue}Please select your character from the menu below:{/}\n\n" \
+	"{light blue}Please select your character traits from the menus below:{/}\n\n" \
 	"Use the {light green}movement keys{/} to scroll the menu, " \
 	"{light green}Enter{/} to select the current menu item, '{light green}*{/}' " \
 	"for a random menu item, '{light green}ESC{/}' to step back through the " \
-	"birth process, '{light green}={/}' for the birth options, '{light green}?{/} " \
+	"birth process, '{light green}={/}' for the birth options, '{light green}?{/}' " \
 	"for help, or '{light green}Ctrl-X{/}' to quit."
 
 /**
@@ -655,7 +656,7 @@ static enum birth_stage roller_command(bool first_call)
 	/* Prepare a prompt (must squeeze everything in) */
 	strnfcat(prompt, sizeof (prompt), &promptlen, "['r' to reroll");
 	if (prev_roll) 
-		strnfcat(prompt, sizeof(prompt), &promptlen, ", 'p' for prev");
+		strnfcat(prompt, sizeof(prompt), &promptlen, ", 'p' for previous roll");
 	strnfcat(prompt, sizeof (prompt), &promptlen, " or 'Enter' to accept]");
 
 	/* Prompt for it */
@@ -832,12 +833,18 @@ static enum birth_stage point_based_command(void)
  * ------------------------------------------------------------------------
  * Asking for the player's chosen name.
  * ------------------------------------------------------------------------ */
+//phantom changes for server
 static enum birth_stage get_name_command(void)
 {
 	enum birth_stage next;
 	char name[32];
+	
+	if ( arg_force_name ) {
+		next = BIRTH_HISTORY_CHOICE;
+	}
 
-	if (get_character_name(name, sizeof(name))) {
+	
+	else if (get_character_name(name, sizeof(name))) {
 		cmdq_push(CMD_NAME_CHOICE);
 		cmd_set_arg_string(cmdq_peek(), "name", name);
 		next = BIRTH_HISTORY_CHOICE;
@@ -845,6 +852,7 @@ static enum birth_stage get_name_command(void)
 		next = BIRTH_BACK;
 	}
 
+	
 	return next;
 }
 
@@ -921,6 +929,14 @@ int edit_text(char *buffer, int buflen) {
 					int up = line_lengths[y - 1] + 1;
 					if (cursor - up >= 0) cursor -= up;
 				}
+				break;
+
+			case KC_END:
+				cursor = MAX(0, len);
+				break;
+
+			case KC_HOME:
+				cursor = 0;
 				break;
 
 			case KC_BACKSPACE:

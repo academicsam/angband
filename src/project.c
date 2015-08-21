@@ -23,6 +23,7 @@
 #include "generate.h"
 #include "init.h"
 #include "mon-util.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "project.h"
 
@@ -317,26 +318,28 @@ bool projectable(struct chunk *c, int y1, int x1, int y2, int x2, int flg)
  * Note that elements come first, so GF_ACID == ELEM_ACID, etc
  * ------------------------------------------------------------------------ */
 static const struct gf_type {
-	const char *desc;	/* text description (if blind) */
+	const char *desc;	/* text description */
+	const char *blind_desc;	/* text description (if blind) */
 	int num;			/* numerator for resistance */
 	random_value denom;	/* denominator for resistance */
 	bool force_obvious; /* */
  	byte color;			/* */
 } gf_table[] = {
-	#define ELEM(a, b, c, d, e, f, g, h, i, col) { d, e, f, FALSE, col },
+	#define ELEM(a, b, c, d, e, f, g, h, i, col) { c, d, e, f, TRUE, col },
 	#define RV(b, x, y, m) {b, x, y, m}
 	#include "list-elements.h"
 	#undef ELEM
 	#undef RV
 
-	#define PROJ_ENV(a, col) { NULL, 0, {0, 0, 0, 0}, FALSE, col },
+	#define PROJ_ENV(a, col, desc) { desc, NULL, 0, {0, 0, 0, 0}, FALSE, col },
 	#include "list-project-environs.h"
 	#undef PROJ_ENV
 
-	#define PROJ_MON(a, obv) { NULL, 0, {0, 0, 0, 0}, obv, COLOUR_WHITE }, 
+	#define PROJ_MON(a, obv, desc) \
+		{ desc, NULL, 0, {0, 0, 0, 0}, obv, COLOUR_WHITE }, 
 	#include "list-project-monsters.h"
 	#undef PROJ_MON
-	{ NULL, 0, {0, 0, 0, 0}, FALSE, COLOUR_WHITE }
+	{ NULL, NULL, 0, {0, 0, 0, 0}, FALSE, COLOUR_WHITE }
 };
 
 static const char *gf_name_list[] =
@@ -344,10 +347,10 @@ static const char *gf_name_list[] =
 	#define ELEM(a, b, c, d, e, f, g, h, i, col) #a,
 	#include "list-elements.h"
 	#undef ELEM
-	#define PROJ_ENV(a, col) #a,
+	#define PROJ_ENV(a, col, desc) #a,
 	#include "list-project-environs.h"
 	#undef PROJ_ENV
-	#define PROJ_MON(a, obv) #a,
+	#define PROJ_MON(a, obv, desc) #a,
 	#include "list-project-monsters.h"
 	#undef PROJ_MON
 	"MAX",
@@ -393,6 +396,17 @@ const char *gf_desc(int type)
 		return 0;
 
 	return gf_table[type].desc;
+}
+
+const char *gf_blind_desc(int type)
+{
+	if (type < 0 || type >= GF_MAX)
+		return 0;
+
+	if (gf_table[type].blind_desc)
+		return gf_table[type].blind_desc;
+	else
+		return "something";
 }
 
 int gf_name_to_idx(const char *name)
@@ -583,6 +597,9 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 	/* Assume the player sees nothing */
 	bool notice = FALSE;
 
+	/* Notify the UI if it can draw this projection */
+	bool drawing = FALSE;
+
 	/* Is the player blind? */
 	bool blind = (player->timed[TMD_BLIND] ? TRUE : FALSE);
 
@@ -608,7 +625,7 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 	int *dam_at_dist = malloc((z_info->max_range + 1) * sizeof(*dam_at_dist));
 
 	/* Flush any pending output */
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 
 	/* No projection path - jump to target */
 	if (flg & (PROJECT_JUMP)) {
@@ -716,11 +733,12 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 
 				/* Only do visuals if requested and within range limit. */
 				if (!blind && !(flg & (PROJECT_HIDE))) {
-					bool seen = player_has_los_bold(y, x);
+					bool seen = square_isview(cave, y, x);
 					bool beam = flg & (PROJECT_BEAM);
 
 					/* Tell the UI to display the bolt */
-					event_signal_bolt(EVENT_BOLT, typ, seen, beam, oy, ox, y, x);
+					event_signal_bolt(EVENT_BOLT, typ, drawing, seen, beam, oy,
+									  ox, y, x);
 				}
 			}
 	}
@@ -919,7 +937,7 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 	if (!blind && !(flg & (PROJECT_HIDE))) {
 		for (i = 0; i < num_grids; i++) {
 			if (panel_contains(blast_grid[i].y, blast_grid[i].x) &&
-				player_has_los_bold(blast_grid[i].y, blast_grid[i].x))
+				square_isview(cave, blast_grid[i].y, blast_grid[i].x))
 				player_sees_grid[i] = TRUE;
 			else
 				player_sees_grid[i] = FALSE;
@@ -928,7 +946,7 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 
 	/* Tell the UI to display the blast */
 	event_signal_blast(EVENT_EXPLOSION, typ, num_grids, distance_to_grid,
-					   player_sees_grid, blast_grid, centre);
+					   drawing, player_sees_grid, blast_grid, centre);
 
 	/* Check objects */
 	if (flg & (PROJECT_ITEM)) {
@@ -975,12 +993,12 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 
 			/* Track if possible */
 			if (cave->squares[y][x].mon > 0) {
-				monster_type *m_ptr = square_monster(cave, y, x);
+				struct monster *mon = square_monster(cave, y, x);
 
 				/* Recall and track */
-				if (mflag_has(m_ptr->mflag, MFLAG_VISIBLE)) {
-					monster_race_track(player->upkeep, m_ptr->race);
-					health_track(player->upkeep, m_ptr);
+				if (mflag_has(mon->mflag, MFLAG_VISIBLE)) {
+					monster_race_track(player->upkeep, mon->race);
+					health_track(player->upkeep, mon);
 				}
 			}
 		}
@@ -1030,7 +1048,7 @@ bool project(int who, int rad, int y, int x, int dam, int typ, int flg,
 
 	/* Update stuff if needed */
 	if (player->upkeep->update)
-		update_stuff(player->upkeep);
+		update_stuff(player);
 
 	free(dam_at_dist);
 

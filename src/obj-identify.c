@@ -25,10 +25,12 @@
 #include "obj-gear.h"
 #include "obj-identify.h"
 #include "obj-ignore.h"
+#include "obj-make.h"
 #include "obj-slays.h"
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "object.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-timed.h"
 #include "player-util.h"
@@ -63,7 +65,8 @@ bool easy_know(const struct object *obj)
  */
 bool object_all_flags_are_known(const struct object *obj)
 {
-	return of_is_full(obj->known_flags) ? TRUE : FALSE;
+	return easy_know(obj) || of_is_subset(obj->known_flags, obj->flags)
+		? TRUE : FALSE;
 }
 
 
@@ -77,7 +80,10 @@ bool object_all_elements_are_known(const struct object *obj)
 	size_t i;
 
 	for (i = 0; i < ELEM_MAX; i++)
-		if (!(obj->el_info[i].flags & EL_INFO_KNOWN)) return FALSE;
+		/* Only check if the flags are set if there's someting to look at */
+		if ((obj->el_info[i].res_level != 0) &&
+			!object_element_is_known(obj, i))
+			return FALSE;
 
 	return TRUE;
 }
@@ -108,7 +114,7 @@ bool object_all_brands_and_slays_are_known(const struct object *obj)
  */
 bool object_all_miscellaneous_are_known(const struct object *obj)
 {
-	return id_is_full(obj->id_flags) ? TRUE : FALSE;
+	return easy_know(obj) || id_is_full(obj->id_flags) ? TRUE : FALSE;
 }
 
 /**
@@ -122,6 +128,7 @@ bool object_all_but_flavor_is_known(const struct object *obj)
 	if (!object_all_elements_are_known(obj)) return FALSE;
 	if (!object_all_brands_and_slays_are_known(obj)) return FALSE;
 	if (!object_all_miscellaneous_are_known(obj)) return FALSE;
+
 	return TRUE;
 }
 
@@ -155,8 +162,8 @@ bool object_is_known_not_artifact(const struct object *obj)
  */
 bool object_was_worn(const struct object *obj)
 {
-	/* A hack, OK for now as ID_STR is only gained on wield or identify - NRM */
-	return id_has(obj->id_flags, ID_STR) ? TRUE : FALSE;
+	/* Not really in keeping, but it works for now */
+	return id_has(obj->id_flags, ID_WORN) ? TRUE : FALSE;
 }
 
 /**
@@ -333,8 +340,8 @@ bool object_check_for_ident(struct object *obj)
 		}
 	}
 
-	/* We still know all the flags, so we still know if it's an ego */
-	if (obj->ego)
+	/* We still know all the flags, so if it's worn if it's an ego */
+	if (obj->ego && object_was_worn(obj))
 		object_notice_ego(obj);
 
 	return FALSE;
@@ -348,33 +355,18 @@ bool object_check_for_ident(struct object *obj)
  */
 void object_flavor_aware(struct object *obj)
 {
-	int i, y, x;
+	int y, x;
 
 	if (obj->kind->aware) return;
 	obj->kind->aware = TRUE;
 
-	/* Charges or food value (pval) and effect now known */
-	id_on(obj->id_flags, ID_PVAL);
-	id_on(obj->id_flags, ID_EFFECT);
-
-	/* Jewelry with fixed bonuses gets more info now */
-	if (tval_is_jewelry(obj)) {
-		if (!randcalc_varies(obj->kind->to_h)) 
-			id_on(obj->id_flags, ID_TO_H);
-		if (!randcalc_varies(obj->kind->to_d))
-			id_on(obj->id_flags, ID_TO_D);
-		if (!randcalc_varies(obj->kind->to_a))
-			id_on(obj->id_flags, ID_TO_A);
-		for (i = 0; i < OBJ_MOD_MAX; i++)
-			if (!randcalc_varies(obj->kind->modifiers[i]))
-				id_on(obj->id_flags, ID_MOD_MIN + i);
-	}
+	/* A bunch of ID flags are now known */
+	id_set_aware(obj);
 
 	/* Fix ignore/autoinscribe */
 	if (kind_is_ignored_unaware(obj->kind))
 		kind_ignore_when_aware(obj->kind);
 	player->upkeep->notice |= PN_IGNORE;
-	apply_autoinscription(obj);
 
 	/* Quit if no dungeon yet */
 	if (!cave) return;
@@ -499,6 +491,7 @@ void object_notice_everything(struct object *obj)
 
 	/* Know everything else */
 	object_know_all_but_flavor(obj);
+	apply_autoinscription(obj);
 }
 
 
@@ -518,7 +511,7 @@ void object_notice_ego(struct object *obj)
 	/* Learn ego flags */
 	of_union(obj->known_flags, obj->ego->flags);
 
-	/* Learn ego element properties */
+	/* Learn ego element properties (note random ones aren't learned) */
 	for (i = 0; i < ELEM_MAX; i++)
 		if (obj->ego->el_info[i].res_level != 0)
 			obj->el_info[i].flags |= EL_INFO_KNOWN;
@@ -526,24 +519,32 @@ void object_notice_ego(struct object *obj)
 	/* Learn all flags except random abilities */
 	of_setall(learned_flags);
 
-	/* Random ego extras */
+	/* Learn all brands and slays */
+	object_know_brands_and_slays(obj);
+
+	/* Don't learn random ego extras */
 	if (kf_has(obj->ego->kind_flags, KF_RAND_SUSTAIN)) {
 		create_mask(xtra_flags, FALSE, OFT_SUST, OFT_MAX);
 		of_diff(learned_flags, xtra_flags);
 	} else if (kf_has(obj->ego->kind_flags, KF_RAND_POWER)) {
 		create_mask(xtra_flags, FALSE, OFT_MISC, OFT_PROT, OFT_MAX);
 		of_diff(learned_flags, xtra_flags);
-	} else if (kf_has(obj->ego->kind_flags, KF_RAND_HI_RES)) {
-		for (i = ELEM_HIGH_MIN; i <= ELEM_HIGH_MAX; i++)
-			if ((obj->ego->el_info[i].res_level == 1) &&
-				!(obj->el_info[i].flags & EL_INFO_RANDOM))
-				obj->el_info[i].flags |= EL_INFO_KNOWN;
 	}
 
 	of_union(obj->known_flags, learned_flags);
 
-	if (object_add_id_flag(obj, ID_EGO_ITEM))
-	{
+    /* Learn all element properties except random high resists */
+    for (i = 0; i < ELEM_MAX; i++) {
+        /* Don't learn random ego high resists */
+        if (obj->el_info[i].flags & EL_INFO_RANDOM)
+            continue;
+
+        /* Learn all element properties */
+        if (obj->el_info[i].res_level)
+            obj->el_info[i].flags |= EL_INFO_KNOWN;
+    }
+
+	if (object_add_id_flag(obj, ID_EGO_ITEM)) {
 		/* if you know the ego, you know which it is of excellent or splendid */
 		object_notice_sensing(obj);
 		object_check_for_ident(obj);
@@ -598,7 +599,8 @@ void object_notice_attack_plusses(struct object *obj)
 
 	assert(obj && obj->kind);
 
-	if (object_attack_plusses_are_visible(obj)) return;
+	if (object_attack_plusses_are_visible(obj) && object_flavor_is_aware(obj))
+		return;
 
 	/* This looks silly while these only ever appear together */
 	to_hit = object_add_id_flag(obj, ID_TO_H);
@@ -616,6 +618,8 @@ void object_notice_attack_plusses(struct object *obj)
 		msgt(MSG_PSEUDOID, "Your %s glow%s.", o_name,
 			 ((obj->number > 1) ? "" : "s"));
 
+	if (object_all_but_flavor_is_known(obj)) object_flavor_aware(obj);
+
 	player->upkeep->update |= (PU_BONUS);
 	event_signal(EVENT_INVENTORY);
 	event_signal(EVENT_EQUIPMENT);
@@ -630,7 +634,7 @@ bool object_notice_element(struct object *obj, int element)
 	if (element < 0 || element >= ELEM_MAX) return FALSE;
 
 	/* Already known */
-	if (obj->el_info[element].flags & EL_INFO_KNOWN)
+	if (object_element_is_known(obj, element))
 		return FALSE;
 
 	/* Learn about this element */
@@ -715,15 +719,17 @@ void object_notice_on_wield(struct object *obj)
 	bool obvious = FALSE;
 	int i;
 
-	/* Only deal with un-ID'd items */
-	if (object_is_known(obj)) return;
+	/* Always set the worn flag */
+	id_on(obj->id_flags, ID_WORN);
 
 	/* EASY_KNOW jewelry is now known */
-	if (object_flavor_is_aware(obj) && easy_know(obj))
-	{
+	if (object_flavor_is_aware(obj) && easy_know(obj)) {
 		object_notice_everything(obj);
 		return;
 	}
+
+	/* Only deal with un-ID'd items */
+	if (object_is_known(obj)) return;
 
 	/* Worn means tried (for flavored wearables) */
 	object_flavor_tried(obj);
@@ -735,7 +741,7 @@ void object_notice_on_wield(struct object *obj)
 	create_mask(obvious_mask, TRUE, OFID_WIELD, OFT_MAX);
 
 	/* special case FA, needed for mages wielding gloves */
-	if (player_has(PF_CUMBER_GLOVE) && obj->tval == TV_GLOVES &&
+	if (player_has(player, PF_CUMBER_GLOVE) && obj->tval == TV_GLOVES &&
 		(obj->modifiers[OBJ_MOD_DEX] <= 0) && 
 		!kf_has(obj->kind->kind_flags, KF_SPELLS_OK))
 		of_on(obvious_mask, OF_FREE_ACT);
@@ -771,8 +777,10 @@ void object_notice_on_wield(struct object *obj)
 	if (tval_is_jewelry(obj))
 	{
 		/* Learn the flavor of jewelry with obvious flags */
-		if (obvious)
+		if (obvious) {
 			object_flavor_aware(obj);
+			apply_autoinscription(obj);
+		}
 
 		/* Learn all flags and elements on any aware non-artifact jewelry */
 		if (object_flavor_is_aware(obj) && !obj->artifact) {
@@ -808,7 +816,7 @@ void object_notice_on_wield(struct object *obj)
 		msg("You feel sicklier!");
 	if (obj->modifiers[OBJ_MOD_STEALTH] > 0)
 		msg("You feel stealthier.");
-	else if (obj->modifiers[OBJ_MOD_SPEED] < 0)
+	else if (obj->modifiers[OBJ_MOD_STEALTH] < 0)
 		msg("You feel noisier.");
 	if (obj->modifiers[OBJ_MOD_SPEED] > 0)
 		msg("You feel strangely quick.");
@@ -822,19 +830,39 @@ void object_notice_on_wield(struct object *obj)
 		msg("Your bow tingles in your hands.");
 	else if (obj->modifiers[OBJ_MOD_SHOTS] < 0)
 		msg("Your bow aches in your hands.");
-	if (obj->modifiers[OBJ_MOD_INFRA])
+	if (obj->modifiers[OBJ_MOD_INFRA] > 0)
+		msg("Your eyes tingle.");
+	else if (obj->modifiers[OBJ_MOD_INFRA] < 0)
 		msg("Your eyes tingle.");
 	if (obj->modifiers[OBJ_MOD_LIGHT])
 		msg("It glows!");
 	if (of_has(f, OF_TELEPATHY))
 		msg("Your mind feels strangely sharper!");
-	if (of_has(f, OF_FREE_ACT))
+	if (of_has(f, OF_FREE_ACT) && of_has(obvious_mask, OF_FREE_ACT))
 		msg("You feel mobile!");
 
 	/* Remember the flags */
 	object_notice_sensing(obj);
 }
 
+
+/**
+ * Notice object properties that become obvious on use, mark it as
+ * aware and reward the player with some experience.
+ */
+void object_notice_on_use(struct object *obj)
+{
+	/* Object level */
+	int lev = obj->kind->level;
+
+	object_flavor_aware(obj);
+	object_notice_effect(obj);
+	if (tval_is_rod(obj))
+		object_notice_everything(obj);
+	player_exp_gain(player, (lev + (player->lev / 2)) / player->lev);
+
+	player->upkeep->notice |= PN_IGNORE;
+}
 
 /**
  * ------------------------------------------------------------------------
@@ -900,6 +928,7 @@ static void equip_notice_after_time(void)
 					/* Jewelry with a noticeable flag is obvious */
 					object_flavor_aware(obj);
 					object_check_for_ident(obj);
+					apply_autoinscription(obj);
 				}
 			} else {
 				/* Notice the flag is absent */
@@ -907,6 +936,9 @@ static void equip_notice_after_time(void)
 			}
 		}
 	}
+
+	/* Notice new info */
+	event_signal(EVENT_EQUIPMENT);
 }
 
 
@@ -939,6 +971,7 @@ void equip_notice_flag(struct player *p, int flag)
 			if (tval_is_jewelry(obj)) {
 				object_flavor_aware(obj);
 				object_check_for_ident(obj);
+				apply_autoinscription(obj);
 			}
 
 			/* Message */
@@ -969,7 +1002,7 @@ void equip_notice_element(struct player *p, int element)
 		if (!obj) continue;
 
 		/* Already known */
-		if (obj->el_info[element].flags & EL_INFO_KNOWN) continue;
+		if (object_element_is_known(obj, element)) continue;
 
 		/* Notice the element properties */
 		object_notice_element(obj, element);
@@ -979,13 +1012,14 @@ void equip_notice_element(struct player *p, int element)
 			char o_name[80];
 			object_desc(o_name, sizeof(o_name), obj, ODESC_BASE);
 
-			msg("Your %s glows", o_name);
-		}
+			msg("Your %s glows.", o_name);
 
-		/* Jewelry with a noticeable element is obvious */
-		if (tval_is_jewelry(obj)) {
-			object_flavor_aware(obj);
-			object_check_for_ident(obj);
+			/* Jewelry with a noticeable element is obvious */
+			if (tval_is_jewelry(obj)) {
+				object_flavor_aware(obj);
+				object_check_for_ident(obj);
+				apply_autoinscription(obj);
+			}
 		}
 	}
 }
@@ -1003,7 +1037,7 @@ void equip_notice_to_hit_on_attack(struct player *p)
 	for (i = 0; i < p->body.count; i++) {
 		struct object *obj = slot_object(p, i);
 		if (i == slot_by_name(p, "weapon")) continue;
-		if (i == slot_by_name(p, "bow")) continue;
+		if (i == slot_by_name(p, "shooting")) continue;
 		if (obj && obj->to_h)
 			object_notice_attack_plusses(obj);
 	}
@@ -1023,7 +1057,7 @@ void equip_notice_on_attack(struct player *p)
 	for (i = 0; i < p->body.count; i++) {
 		struct object *obj = slot_object(p, i);
 		if (i == slot_by_name(p, "weapon")) continue;
-		if (i == slot_by_name(p, "bow")) continue;
+		if (i == slot_by_name(p, "shooting")) continue;
 		if (obj)
 			object_notice_attack_plusses(obj);
 	}
@@ -1048,17 +1082,14 @@ bool object_high_resist_is_possible(const struct object *obj)
 
 	/* Look at all the high resists */
 	for (i = ELEM_HIGH_MIN; i <= ELEM_HIGH_MAX; i++) {
-		/* Object doesn't have it - not interesting */
-		if (obj->el_info[i].res_level <= 0) continue;
+		/* Object has the resist */
+		if (obj->el_info[i].res_level > 0) return TRUE;
 
-		/* Element properties known */
-		if (obj->el_info[i].flags & EL_INFO_KNOWN) continue;
-
-		/* Has a resist, or doubt remains */
-		return TRUE;
+		/* Element properties unknown */
+		if (!object_element_is_known(obj, i)) return TRUE;
 	}
 
-	/* No doubt left */
+	/* No possibilities */
 	return FALSE;
 }
 
@@ -1083,12 +1114,20 @@ void object_notice_sensing(struct object *obj)
 	if (obj->artifact) {
 		obj->artifact->seen = obj->artifact->everseen = TRUE;
 		id_on(obj->id_flags, ID_ARTIFACT);
+		history_add_artifact(obj->artifact, object_is_known(obj), TRUE);
 	}
 
 	object_notice_curses(obj);
 	/* Hackish - NRM */
 	if (object_add_id_flag(obj, ID_AC))
 		object_check_for_ident(obj);
+
+	/* For unflavoured objects we can rule out some things */
+	if (!obj->artifact && !obj->ego && !obj->kind->flavor) {
+		object_know_all_flags(obj);
+		object_know_all_elements(obj);
+		object_know_brands_and_slays(obj);
+	}
 }
 
 
@@ -1109,7 +1148,9 @@ void object_sense_artifact(struct object *obj)
  */
 obj_pseudo_t object_pseudo(const struct object *obj)
 {
+	int i;
 	bitflag flags[OF_SIZE], f2[OF_SIZE];
+	struct brand *b;
 
 	/* Get the known and obvious flags on the object,
 	 * not including curses or properties of the kind.
@@ -1118,7 +1159,7 @@ obj_pseudo_t object_pseudo(const struct object *obj)
 	create_mask(f2, TRUE, OFID_WIELD, OFT_MAX);
 
 	/* FA on gloves is obvious to mage casters */
-	if (player_has(PF_CUMBER_GLOVE) && obj->tval == TV_GLOVES &&
+	if (player_has(player, PF_CUMBER_GLOVE) && obj->tval == TV_GLOVES &&
 		(obj->modifiers[OBJ_MOD_DEX] <= 0) && 
 		!kf_has(obj->kind->kind_flags, KF_SPELLS_OK))
 		of_on(f2, OF_FREE_ACT);
@@ -1138,12 +1179,22 @@ obj_pseudo_t object_pseudo(const struct object *obj)
 	if (tval_is_jewelry(obj))
 		return INSCRIP_NULL;
 
-	/* XXX Should also check for flags with pvals where the pval exceeds
-	 * the base pval for things like picks of digging, though for now acid
-	 * brand gets those
-	 */
+	/* Check modifiers for splendid - anything different from kind base
+	 * modifier is splendid (in fact, kind base modifiers are currently
+	 * constant for all relevant objects) */
+	for (i = 0; i < OBJ_MOD_MAX; i++)
+		if ((obj->modifiers[i] != obj->kind->modifiers[i].base) &&
+			object_this_mod_is_visible(obj, i))
+			return INSCRIP_SPLENDID;
+
+	/* Any remaining obvious-on-wield flags also mean splendid */
 	if (!of_is_empty(flags))
 		return INSCRIP_SPLENDID;
+
+	/* Known brands are also splendid */
+	for (b = obj->brands; b; b = b->next)
+		if (b->known)
+			return INSCRIP_SPLENDID;
 
 	if (!object_is_known(obj) && !object_was_sensed(obj))
 		return INSCRIP_NULL;
@@ -1190,6 +1241,9 @@ void do_ident_item(struct object *obj)
 	object_flavor_aware(obj);
 	object_notice_everything(obj);
 	apply_autoinscription(obj);
+
+	/* Update the gear */
+	calc_inventory(player->upkeep, player->gear, player->body);
 
 	/* Set ignore flag */
 	player->upkeep->notice |= PN_IGNORE;
@@ -1257,7 +1311,7 @@ void sense_inventory(void)
 	}
 
 	/* Get improvement rate */
-	if (player_has(PF_PSEUDO_ID_IMPROV))
+	if (player_has(player, PF_PSEUDO_ID_IMPROV))
 		rate = player->class->sense_base /
 			(player->lev * player->lev + player->class->sense_div);
 	else

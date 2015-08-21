@@ -21,6 +21,7 @@
 #include "cmds.h"
 #include "init.h"
 #include "monster.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 
 /**
@@ -500,9 +501,7 @@ static void add_monster_lights(struct chunk *c, struct loc from)
 
 		/* Light a 3x3 box centered on the monster */
 		for (i = -1; i <= 1; i++)
-		{
-			for (j = -1; j <= 1; j++)
-			{
+			for (j = -1; j <= 1; j++) {
 				int sy = m->fy + i;
 				int sx = m->fx + j;
 				
@@ -522,7 +521,6 @@ static void add_monster_lights(struct chunk *c, struct loc from)
 				sqinfo_on(c->squares[sy][sx].info, SQUARE_VIEW);
 				sqinfo_on(c->squares[sy][sx].info, SQUARE_SEEN);
 			}
-		}
 	}
 }
 
@@ -541,8 +539,10 @@ static void update_one(struct chunk *c, int y, int x, int blind)
 			sqinfo_off(c->squares[y][x].info, SQUARE_FEEL);
 			/* Don't display feeling if it will display for the new level */
 			if ((c->feeling_squares == z_info->feeling_need) &&
-				!player->upkeep->only_partial)
+				!player->upkeep->only_partial) {
 				display_feeling(TRUE);
+				player->upkeep->redraw |= PR_FEELING;
+			}
 		}
 
 		square_note_spot(c, y, x);
@@ -589,6 +589,7 @@ static void become_viewable(struct chunk *c, int y, int x, int lit, int py, int 
  */
 static void update_view_one(struct chunk *c, int y, int x, int radius, int py, int px)
 {
+	int dir;
 	int xc = x;
 	int yc = y;
 
@@ -597,6 +598,14 @@ static void update_view_one(struct chunk *c, int y, int x, int radius, int py, i
 
 	if (d > z_info->max_sight)
 		return;
+
+	/* Light squares with adjacent bright terrain */
+	for (dir = 0; dir < 8; dir++) {
+		if (!square_in_bounds(c, y + ddy_ddd[dir], x + ddx_ddd[dir]))
+			continue;
+		if (square_isbright(c, y + ddy_ddd[dir], x + ddx_ddd[dir]))
+			lit = TRUE;
+	}
 
 	/* Special case for wall lighting. If we are a wall and the square in
 	 * the direction of the player is in LOS, we are in LOS. This avoids
@@ -650,7 +659,7 @@ static void update_view_one(struct chunk *c, int y, int x, int radius, int py, i
 }
 
 /**
- * update the player's current view
+ * Update the player's current view
  */
 void update_view(struct chunk *c, struct player *p)
 {
@@ -686,32 +695,10 @@ void update_view(struct chunk *c, struct player *p)
 
 
 /**
- * Determine if a "legal" grid is within "los" of the player
- */
-bool player_has_los_bold(int y, int x)
-{
-	if (sqinfo_has(cave->squares[y][x].info, SQUARE_VIEW))
-		return TRUE;
-
-	return FALSE;
-}
-
-/**
- * Determine if a "legal" grid can be "seen" by the player
- */
-bool player_can_see_bold(int y, int x)
-{
-	if (sqinfo_has(cave->squares[y][x].info, SQUARE_SEEN))
-		return TRUE;
-
-	return FALSE;
-}
-
-/**
  * Returns true if the player's grid is dark
  */
 bool no_light(void)
 {
-	return (!player_can_see_bold(player->py, player->px));
+	return (!square_isseen(cave, player->py, player->px));
 }
 

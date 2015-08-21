@@ -43,6 +43,7 @@ typedef enum game_event_type
 	EVENT_STUDYSTATUS,	/* "Study" availability */
 	EVENT_STATUS,		/* Status */
 	EVENT_DETECTIONSTATUS,	/* Trap detection status */
+	EVENT_FEELING,		/* Object level feeling */
 	EVENT_STATE,		/* The three 'R's: Resting, Repeating and
 				   Searching */
 
@@ -61,6 +62,7 @@ typedef enum game_event_type
 	EVENT_MESSAGE,
 	EVENT_SOUND,
 	EVENT_BELL,
+	EVENT_USE_STORE,
 	EVENT_STORECHANGED,	/* Triggered on a successful buy/retrieve or sell/drop */
 
 	EVENT_INPUT_FLUSH,
@@ -82,6 +84,8 @@ typedef enum game_event_type
 	EVENT_LEAVE_BIRTH,
 	EVENT_ENTER_GAME,
 	EVENT_LEAVE_GAME,
+	EVENT_ENTER_WORLD,
+	EVENT_LEAVE_WORLD,
 	EVENT_ENTER_STORE,
 	EVENT_LEAVE_STORE,
 	EVENT_ENTER_DEATH,
@@ -127,6 +131,7 @@ typedef union
 		int gf_type;
 		int num_grids;
 		int *distance_to_grid;
+		bool drawing;
 		bool *player_sees_grid;
 		struct loc *blast_grid;
 		struct loc centre;
@@ -135,6 +140,7 @@ typedef union
 	struct
 	{
 		int gf_type;
+		bool drawing;
 		bool seen;
 		bool beam;
 		int oy;
@@ -164,6 +170,7 @@ typedef void game_event_handler(game_event_type type, game_event_data *data, voi
 
 void event_add_handler(game_event_type type, game_event_handler *fn, void *user);
 void event_remove_handler(game_event_type type, game_event_handler *fn, void *user);
+void event_remove_handler_type(game_event_type type);
 void event_remove_all_handlers(void);
 void event_add_handler_set(game_event_type *type, size_t n_types, game_event_handler *fn, void *user);
 void event_remove_handler_set(game_event_type *type, size_t n_types, game_event_handler *fn, void *user);
@@ -179,11 +186,13 @@ void event_signal_blast(game_event_type type,
 						int gf_type,
 						int num_grids,
 						int *distance_to_grid,
+						bool seen,
 						bool *player_sees_grid,
 						struct loc *blast_grid,
 						struct loc centre);
 void event_signal_bolt(game_event_type type,
 					   int gf_type,
+					   bool drawing,
 					   bool seen,
 					   bool beam,
 					   int oy,

@@ -32,6 +32,7 @@
 #include "obj-info.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-timed.h"
 #include "player-util.h"
 #include "store.h"
@@ -220,7 +221,7 @@ static int context_menu_player_2(int mx, int my)
 
 static void context_menu_player_display_floor(void)
 {
-	int diff = weight_remaining();
+	int diff = weight_remaining(player);
 	struct object *obj;
 
 	/* There is an item on the floor, select from there */
@@ -257,7 +258,7 @@ int context_menu_player(int mx, int my)
 	bool allowed = TRUE;
 	int mode = OPT(rogue_like_commands) ? KEYMAP_MODE_ROGUE : KEYMAP_MODE_ORIG;
 	unsigned char cmdkey;
-	struct object *o_ptr;
+	struct object *obj;
 
 	m = menu_dynamic_new();
 	if (!m) {
@@ -296,13 +297,13 @@ int context_menu_player(int mx, int my)
 	menu_dynamic_add_label(m, "Inventory", 'i', MENU_VALUE_INVENTORY, labels);
 
 	/* if object under player add pickup option */
-	o_ptr = square_object(cave, player->py, player->px);
-	if (o_ptr && !ignore_item_ok(o_ptr)) {
+	obj = square_object(cave, player->py, player->px);
+	if (obj && !ignore_item_ok(obj)) {
 			menu_row_validity_t valid;
 
 			/* 'f' isn't in rogue keymap, so we can use it here. */
   			menu_dynamic_add_label(m, "Floor", 'f', MENU_VALUE_FLOOR, labels);
-			valid = (inven_carry_okay(o_ptr)) ? MN_ROW_VALID : MN_ROW_INVALID;
+			valid = (inven_carry_okay(obj)) ? MN_ROW_VALID : MN_ROW_INVALID;
 			ADD_LABEL("Pick up", CMD_PICKUP, valid);
 	}
 
@@ -519,10 +520,10 @@ int context_menu_cave(struct chunk *c, int y, int x, int adjacent, int mx,
 		prt("(Enter to select command, ESC to cancel) You see something strange:", 0, 0);
 	} else if (c->squares[y][x].mon) {
 		char m_name[80];
-		monster_type *m_ptr = square_monster(c, y, x);
+		struct monster *mon = square_monster(c, y, x);
 
 		/* Get the monster name ("a kobold") */
-		monster_desc(m_name, sizeof(m_name), m_ptr, MDESC_IND_VIS);
+		monster_desc(m_name, sizeof(m_name), mon, MDESC_IND_VIS);
 
 		prt(format("(Enter to select command, ESC to cancel) You see %s:",
 				   m_name), 0, 0);
@@ -607,10 +608,10 @@ int context_menu_cave(struct chunk *c, int y, int x, int adjacent, int mx,
 
 		case MENU_VALUE_RECALL: {
 			/* Recall monster Info */
-			monster_type *m_ptr = square_monster(c, y, x);
-			if (m_ptr) {
-				monster_lore *lore = get_lore(m_ptr->race);
-				lore_show_interactive(m_ptr->race, lore);
+			struct monster *mon = square_monster(c, y, x);
+			if (mon) {
+				struct monster_lore *lore = get_lore(mon->race);
+				lore_show_interactive(mon->race, lore);
 			}
 		}
 			break;
@@ -709,7 +710,7 @@ int context_menu_object(struct object *obj)
 			ADD_LABEL("Read", CMD_READ_SCROLL, valid);
 		} else if (tval_is_potion(obj)) {
 			ADD_LABEL("Quaff", CMD_QUAFF, MN_ROW_VALID);
-		} else if (tval_is_food(obj)) {
+		} else if (tval_is_edible(obj)) {
 			ADD_LABEL("Eat", CMD_EAT, MN_ROW_VALID);
 		} else if (obj_is_activatable(obj)) {
 			menu_row_validity_t valid = (object_is_equipped(player->body, obj)
@@ -733,8 +734,7 @@ int context_menu_object(struct object *obj)
 	}
 
 	if (object_is_carried(player, obj)) {
-		if (!square_isshop(cave, player->py, player->px) ||
-			square_shopnum(cave, player->py, player->px) == STORE_HOME) {
+		if (!square_isshop(cave, player->py, player->px)) {
 			ADD_LABEL("Drop", CMD_DROP, MN_ROW_VALID);
 
 			if (obj->number > 1) {
@@ -743,6 +743,17 @@ int context_menu_object(struct object *obj)
 				menu_dynamic_add_label(m, "Drop All", cmdkey,
 									   MENU_VALUE_DROP_ALL, labels);
 			}
+		} else if (square_shopnum(cave, player->py, player->px) == STORE_HOME) {
+			ADD_LABEL("Drop", CMD_DROP, MN_ROW_VALID);
+
+			if (obj->number > 1) {
+				/* 'D' is used for ignore in rogue keymap, so swap letters. */
+				cmdkey = (mode == KEYMAP_MODE_ORIG) ? 'D' : 'k';
+				menu_dynamic_add_label(m, "Drop All", cmdkey,
+									   MENU_VALUE_DROP_ALL, labels);
+			}
+		} else if (store_will_buy_tester(obj)) {
+			ADD_LABEL("Sell", CMD_DROP, MN_ROW_VALID);
 		}
 	} else {
 		menu_row_validity_t valid = (inven_carry_okay(obj)) ?
@@ -878,7 +889,10 @@ int context_menu_object(struct object *obj)
 		if (selected == CMD_DROP &&
 			square_isshop(cave, player->py, player->px)) {
 			struct command *gc = cmdq_peek();
-			gc->code = CMD_STASH;
+			if (square_shopnum(cave, player->py, player->px) == STORE_HOME)
+				gc->code = CMD_STASH;
+			else
+				gc->code = CMD_SELL;
 		}
 	}
 

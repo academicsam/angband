@@ -26,6 +26,7 @@
 #include "obj-tval.h"
 #include "obj-util.h"
 #include "object.h"
+#include "player-calcs.h"
 #include "ui-display.h"
 #include "ui-help.h"
 #include "ui-input.h"
@@ -1062,14 +1063,14 @@ static const char *strip_ego_name(const char *name)
 /**
  * Display an ego-item type on the screen.
  */
-int ego_item_name(char *buf, size_t buf_size, ego_desc *desc)
+int ego_item_name(char *buf, size_t buf_size, struct ego_desc *desc)
 {
 	size_t i;
 	int end;
 	size_t prefix_size;
 	const char *long_name;
 
-	ego_item_type *ego = &e_info[desc->e_idx];
+	struct ego_item *ego = &e_info[desc->e_idx];
 
 	/* Find the ignore type */
 	for (i = 0; i < N_ELEMENTS(quality_choices); i++)
@@ -1112,8 +1113,8 @@ int ego_item_name(char *buf, size_t buf_size, ego_desc *desc)
  */
 static int ego_comp_func(const void *a_ptr, const void *b_ptr)
 {
-	const ego_desc *a = a_ptr;
-	const ego_desc *b = b_ptr;
+	const struct ego_desc *a = a_ptr;
+	const struct ego_desc *b = b_ptr;
 
 	/* Note the removal of common prefixes */
 	return (strcmp(a->short_name, b->short_name));
@@ -1126,7 +1127,7 @@ static void ego_display(struct menu * menu, int oid, bool cursor, int row,
 						int col, int width)
 {
 	char buf[80] = "";
-	ego_desc *choice = (ego_desc *) menu->menu_data;
+	struct ego_desc *choice = (struct ego_desc *) menu->menu_data;
 	bool ignored = ego_is_ignored(choice[oid].e_idx, choice[oid].itype);
 
 	byte attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
@@ -1151,7 +1152,7 @@ static void ego_display(struct menu * menu, int oid, bool cursor, int row,
  */
 static bool ego_action(struct menu * menu, const ui_event * event, int oid)
 {
-	ego_desc *choice = menu->menu_data;
+	struct ego_desc *choice = menu->menu_data;
 
 	/* Toggle */
 	if (event->type == EVT_SELECT) {
@@ -1169,8 +1170,8 @@ static bool ego_action(struct menu * menu, const ui_event * event, int oid)
 static void ego_menu(const char *unused, int also_unused)
 {
 	int max_num = 0;
-	ego_item_type *ego;
-	ego_desc *choice;
+	struct ego_item *ego;
+	struct ego_desc *choice;
 	struct ego_poss_item *poss;
 
 	struct menu menu;
@@ -1181,7 +1182,7 @@ static void ego_menu(const char *unused, int also_unused)
 	int i;
 
 	/* Create the array */
-	choice = mem_zalloc(z_info->e_max * sizeof(ego_desc));
+	choice = mem_zalloc(z_info->e_max * ITYPE_MAX * sizeof(struct ego_desc));
 
 	/* Get the valid ego-items */
 	for (i = 0; i < z_info->e_max; i++) {
@@ -1195,12 +1196,12 @@ static void ego_menu(const char *unused, int also_unused)
 
 		/* Note the tvals which are possible for this ego */
 		for (poss = ego->poss_items; poss; poss = poss->next) {
-			object_kind *kind = &k_info[poss->kidx];
+			struct object_kind *kind = &k_info[poss->kidx];
 			tval_table[kind->tval]++;
 		}
 
 		/* Find appropriate ignore types */
-		for (itype = ITYPE_NONE; itype < ITYPE_MAX; itype++)
+		for (itype = ITYPE_NONE + 1; itype < ITYPE_MAX; itype++)
 			for (tval = 1; tval < TV_MAX; tval++) {
 				/* Skip invalid types */
 				if (!tval_table[tval]) continue;
@@ -1278,7 +1279,7 @@ static void ego_menu(const char *unused, int also_unused)
  */
 typedef struct
 {
-	object_kind *kind;
+	struct object_kind *kind;
 	bool aware;
 } ignore_choice;
 
@@ -1305,6 +1306,14 @@ static int cmp_ignore(const void *a, const void *b)
 }
 
 /**
+ * Determine if an item is a valid choice
+ */
+int quality_validity(struct menu *menu, int oid)
+{
+	return oid ? 1 : 0;
+}
+
+/**
  * Display an entry in the menu.
  */
 static void quality_display(struct menu *menu, int oid, bool cursor, int row,
@@ -1319,8 +1328,8 @@ static void quality_display(struct menu *menu, int oid, bool cursor, int row,
 
 	byte attr = (cursor ? COLOUR_L_BLUE : COLOUR_WHITE);
 
-
-	c_put_str(attr, format("%-20s : %s", name, level_name), row, col);
+	if (oid)
+		c_put_str(attr, format("%-20s : %s", name, level_name), row, col);
 }
 
 
@@ -1389,7 +1398,8 @@ static bool quality_action(struct menu *m, const ui_event *event, int oid)
 static void quality_menu(void *unused, const char *also_unused)
 {
 	struct menu menu;
-	menu_iter menu_f = { NULL, NULL, quality_display, quality_action, NULL };
+	menu_iter menu_f = { NULL, quality_validity, quality_display,
+						 quality_action, NULL };
 	region area = { 0, 0, 0, 0 };
 
 	/* Save screen */
@@ -1475,7 +1485,7 @@ static void ignore_sval_menu_display(struct menu *menu, int oid, bool cursor,
 	char buf[80];
 	const ignore_choice *choice = menu_priv(menu);
 
-	object_kind *kind = choice[oid].kind;
+	struct object_kind *kind = choice[oid].kind;
 	bool aware = choice[oid].aware;
 
 	byte attr = curs_attrs[(int)aware][0 != cursor];
@@ -1501,7 +1511,7 @@ static bool ignore_sval_menu_action(struct menu *m, const ui_event *event,
 
 	if (event->type == EVT_SELECT ||
 			(event->type == EVT_KBRD && tolower(event->key.code) == 't')) {
-		object_kind *kind = choice[oid].kind;
+		struct object_kind *kind = choice[oid].kind;
 
 		/* Toggle the appropriate flag */
 		if (choice[oid].aware)
@@ -1540,25 +1550,25 @@ static int ignore_collect_kind(int tval, ignore_choice **ch)
 	choice = mem_alloc(2 * z_info->k_max * sizeof *choice);
 
 	for (i = 1; i < z_info->k_max; i++) {
-		object_kind *k_ptr = &k_info[i];
+		struct object_kind *kind = &k_info[i];
 
 		/* Skip empty objects, unseen objects, and incorrect tvals */
-		if (!k_ptr->name || k_ptr->tval != tval)
+		if (!kind->name || kind->tval != tval)
 			continue;
 
-		if (!k_ptr->aware) {
+		if (!kind->aware) {
 			/* can unaware ignore anything */
-			choice[num].kind = k_ptr;
+			choice[num].kind = kind;
 			choice[num++].aware = FALSE;
 		}
 
-		if ((k_ptr->everseen && !kf_has(k_ptr->kind_flags, KF_INSTA_ART)) || 
-			tval_is_money_k(k_ptr)) {
+		if ((kind->everseen && !kf_has(kind->kind_flags, KF_INSTA_ART)) || 
+			tval_is_money_k(kind)) {
 			/* Do not display the artifact base kinds in this list 
 			 * aware ignore requires everseen 
 			 * do not require awareness for aware ignore, so people can set 
 			 * at game start */
-			choice[num].kind = k_ptr;
+			choice[num].kind = kind;
 			choice[num++].aware = TRUE;
 		}
 	}
@@ -1635,12 +1645,12 @@ static bool seen_tval(int tval)
 	int i;
 
 	for (i = 1; i < z_info->k_max; i++) {
-		object_kind *k_ptr = &k_info[i];
+		struct object_kind *kind = &k_info[i];
 
 		/* Skip empty objects, unseen objects, and incorrect tvals */
-		if (!k_ptr->name) continue;
-		if (!k_ptr->everseen) continue;
-		if (k_ptr->tval != tval) continue;
+		if (!kind->name) continue;
+		if (!kind->everseen) continue;
+		if (kind->tval != tval) continue;
 
 		 return TRUE;
 	}
@@ -1789,7 +1799,7 @@ static menu_action option_actions[] =
 {
 	{ 0, 'a', "User interface options", option_toggle_menu },
 	{ 0, 'b', "Birth (difficulty) options", option_toggle_menu },
-	{ 0, 'c', "Cheat options", option_toggle_menu },
+	{ 0, 'x', "Cheat options", option_toggle_menu },
 	{ 0, 'w', "Subwindow setup", do_cmd_options_win },
 	{ 0, 'i', "Item ignoring setup", do_cmd_options_item },
 	{ 0, '{', "Auto-inscription setup", textui_browse_object_knowledge },
@@ -1829,4 +1839,12 @@ void do_cmd_options(void)
 	menu_select(option_menu, 0, FALSE);
 
 	screen_load();
+}
+
+void cleanup_options(void)
+{
+	if (keymap_menu) menu_free(keymap_menu);
+	if (visual_menu) menu_free(visual_menu);
+	if (color_menu) menu_free(color_menu);
+	if (option_menu) menu_free(option_menu);
 }

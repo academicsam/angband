@@ -85,9 +85,9 @@ enum
  * At the moment this isn't very much, but eventually a primitive flag-based
  * information system will be used here.
  */
-typedef struct feature
-{
+struct feature {
 	char *name;
+	char *desc;
 	int fidx;
 
 	struct feature *next;
@@ -102,9 +102,9 @@ typedef struct feature
 
 	byte d_attr;   /**< Default feature attribute */
 	wchar_t d_char;/**< Default feature character */
-} feature_type;
+};
 
-extern feature_type *f_info;
+extern struct feature *f_info;
 
 enum grid_light_level
 {
@@ -115,8 +115,7 @@ enum grid_light_level
 	LIGHTING_MAX
 };
 
-typedef struct
-{
+struct grid_data {
 	u32b m_idx;				/* Monster index */
 	u32b f_idx;				/* Feature index */
 	struct object_kind *first_kind;	/* The kind of the first item on the grid */
@@ -130,7 +129,7 @@ typedef struct
 	bool is_player;
 	bool hallucinate;
 	bool trapborder;
-} grid_data;
+};
 
 struct square {
 	byte feat;
@@ -169,7 +168,7 @@ struct chunk {
 	int mon_current;
 };
 
-/*** Feature Indexes (see "lib/edit/terrain.txt") ***/
+/*** Feature Indexes (see "lib/gamedata/terrain.txt") ***/
 
 /* Nothing */
 int FEAT_NONE;
@@ -187,6 +186,7 @@ int FEAT_SECRET;
 
 /* Rubble */
 int FEAT_RUBBLE;
+int FEAT_PASS_RUBBLE;
 
 /* Mineral seams */
 int FEAT_MAGMA;
@@ -197,6 +197,7 @@ int FEAT_QUARTZ_K;
 /* Walls */
 int FEAT_GRANITE;
 int FEAT_PERM;
+int FEAT_LAVA;
 
 /* Special trap detect features  - should be replaced with square flags */
 int FEAT_DTRAP_FLOOR;
@@ -215,12 +216,10 @@ int distance(int y1, int x1, int y2, int x2);
 bool los(struct chunk *c, int y1, int x1, int y2, int x2);
 void forget_view(struct chunk *c);
 void update_view(struct chunk *c, struct player *p);
-bool player_has_los_bold(int y, int x);
-bool player_can_see_bold(int y, int x);
 bool no_light(void);
 
 /* cave-map.c */
-void map_info(unsigned x, unsigned y, grid_data *g);
+void map_info(unsigned x, unsigned y, struct grid_data *g);
 void square_note_spot(struct chunk *c, int y, int x);
 void square_light_spot(struct chunk *c, int y, int x);
 void light_room(int y1, int x1, bool light);
@@ -246,7 +245,7 @@ bool feat_is_monster_walkable(int feat);
 bool feat_is_shop(int feat);
 bool feat_is_passable(int feat);
 bool feat_is_projectable(int feat);
-bool feat_isboring(feature_type *f_ptr);
+bool feat_is_bright(int feat);
 
 /* SQUARE FEATURE PREDICATES */
 bool square_isfloor(struct chunk *c, int y, int x);
@@ -267,7 +266,6 @@ bool square_isstairs(struct chunk *c, int y, int x);
 bool square_isupstairs(struct chunk *c, int y, int x);
 bool square_isdownstairs(struct chunk *c, int y, int x);
 bool square_isshop(struct chunk *c, int y, int x);
-bool square_noticeable(struct chunk *c, int y, int x);
 bool square_isplayer(struct chunk *c, int y, int x);
 
 /* SQUARE INFO PREDICATES */
@@ -302,7 +300,7 @@ bool square_ispassable(struct chunk *c, int y, int x);
 bool square_isprojectable(struct chunk *c, int y, int x);
 bool square_iswall(struct chunk *c, int y, int x);
 bool square_isstrongwall(struct chunk *c, int y, int x);
-bool square_isboring(struct chunk *c, int y, int x);
+bool square_isbright(struct chunk *c, int y, int x);
 bool square_iswarded(struct chunk *c, int y, int x);
 bool square_canward(struct chunk *c, int y, int x);
 bool square_seemslikewall(struct chunk *c, int y, int x);
@@ -321,6 +319,7 @@ struct monster *square_monster(struct chunk *c, int y, int x);
 struct object *square_object(struct chunk *c, int y, int x);
 bool square_holds_object(struct chunk *c, int y, int x, struct object *obj);
 void square_excise_object(struct chunk *c, int y, int x, struct object *obj);
+void square_excise_pile(struct chunk *c, int y, int x);
 
 void square_set_feat(struct chunk *c, int y, int x, int feat);
 

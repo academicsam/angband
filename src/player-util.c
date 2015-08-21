@@ -27,6 +27,7 @@
 #include "obj-tval.h"
 #include "obj-pile.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-spell.h"
 #include "player-timed.h"
@@ -87,24 +88,25 @@ void take_hit(struct player *p, int dam, const char *kb_str)
 	/* Dead player */
 	if (p->chp < 0) {
 		/* Allow cheating */
-		if ((p->wizard || OPT(cheat_live)) && !get_check("Die? "))
+		if ((p->wizard || OPT(cheat_live)) && !get_check("Die? ")) {
 			event_signal(EVENT_CHEAT_DEATH);
+		} else {
+			/* Hack -- Note death */
+			msgt(MSG_DEATH, "You die.");
+			event_signal(EVENT_MESSAGE_FLUSH);
 
-		/* Hack -- Note death */
-		msgt(MSG_DEATH, "You die.");
-		event_signal(EVENT_MESSAGE_FLUSH);
+			/* Note cause of death */
+			my_strcpy(p->died_from, kb_str, sizeof(p->died_from));
 
-		/* Note cause of death */
-		my_strcpy(p->died_from, kb_str, sizeof(p->died_from));
+			/* No longer a winner */
+			p->total_winner = FALSE;
 
-		/* No longer a winner */
-		p->total_winner = FALSE;
+			/* Note death */
+			p->is_dead = TRUE;
 
-		/* Note death */
-		p->is_dead = TRUE;
-
-		/* Dead */
-		return;
+			/* Dead */
+			return;
+		}
 	}
 
 	/* Hitpoint warning */
@@ -125,7 +127,7 @@ void take_hit(struct player *p, int dam, const char *kb_str)
 void death_knowledge(void)
 {
 	struct store *home = &stores[STORE_HOME];
-	object_type *obj;
+	struct object *obj;
 	time_t death_time = (time_t)0;
 
 	/* Retire in the town in a good state */
@@ -155,10 +157,10 @@ void death_knowledge(void)
 
 	/* Hack -- Recalculate bonuses */
 	player->upkeep->update |= (PU_BONUS);
-	handle_stuff(player->upkeep);
+	handle_stuff(player);
 }
 
-/*
+/**
  * Modify a stat value by a "modifier", return new value
  *
  * Stats go up: 3,4,...,17,18,18/10,18/20,...,18/220
@@ -171,26 +173,19 @@ s16b modify_stat_value(int value, int amount)
 {
 	int i;
 
-	/* Reward */
-	if (amount > 0)
-	{
+	/* Reward or penalty */
+	if (amount > 0) {
 		/* Apply each point */
-		for (i = 0; i < amount; i++)
-		{
+		for (i = 0; i < amount; i++) {
 			/* One point at a time */
 			if (value < 18) value++;
 
 			/* Ten "points" at a time */
 			else value += 10;
 		}
-	}
-
-	/* Penalty */
-	else if (amount < 0)
-	{
+	} else if (amount < 0) {
 		/* Apply each point */
-		for (i = 0; i < (0 - amount); i++)
-		{
+		for (i = 0; i < (0 - amount); i++) {
 			/* Ten points at a time */
 			if (value >= 18+10) value -= 10;
 
@@ -367,7 +362,7 @@ void player_update_light(void)
 				/* If it's a torch, now is the time to delete it */
 				if (of_has(obj->flags, OF_BURNS_OUT)) {
 					gear_excise_object(obj);
-					object_delete(obj);
+					object_delete(&obj);
 				}
 			} else if ((obj->timeout < 50) && (!(obj->timeout % 20))) {
 				/* The light is getting dim */
@@ -492,7 +487,7 @@ bool player_can_read(struct player *p, bool show_msg)
  */
 bool player_can_fire(struct player *p, bool show_msg)
 {
-	object_type *obj = equipped_item_by_slot_name(player, "shooting");
+	struct object *obj = equipped_item_by_slot_name(player, "shooting");
 
 	/* Require a usable launcher */
 	if (!obj || !p->state.ammo_tval)
@@ -515,7 +510,7 @@ bool player_can_fire(struct player *p, bool show_msg)
  */
 bool player_can_refuel(struct player *p, bool show_msg)
 {
-	object_type *obj = equipped_item_by_slot_name(player, "light");
+	struct object *obj = equipped_item_by_slot_name(player, "light");
 
 	if (obj && of_has(obj->flags, OF_TAKES_FUEL))
 		return TRUE;
@@ -575,7 +570,7 @@ bool player_can_refuel_prereq(void)
 bool player_book_has_unlearned_spells(struct player *p)
 {
 	int i, j;
-	const class_book *book;
+	const struct class_book *book;
 
 	/* Check if the player can learn new spells */
 	if (!p->upkeep->new_spells)
@@ -625,9 +620,6 @@ bool player_confuse_dir(struct player *p, int *dp, bool too)
 	return FALSE;
 }
 
-/* Resting counter */
-int resting;
-
 /**
  * Return TRUE if the provided count is one of the conditional REST_ flags.
  */
@@ -648,7 +640,8 @@ bool player_resting_is_special(s16b count)
  */
 bool player_is_resting(struct player *p)
 {
-	return resting > 0 || player_resting_is_special(resting);
+	return (p->upkeep->resting > 0 ||
+			player_resting_is_special(p->upkeep->resting));
 }
 
 /**
@@ -656,12 +649,12 @@ bool player_is_resting(struct player *p)
  */
 s16b player_resting_count(struct player *p)
 {
-	return resting;
+	return p->upkeep->resting;
 }
 
 /**
  * In order to prevent the regeneration bonus from the first few turns, we have
- * to store the original number of turns the user entered. Otherwise, the first
+ * to store the number of turns the player has rested. Otherwise, the first
  * few turns will have the bonus and the last few will not.
  */
 static int player_turns_rested = 0;
@@ -676,32 +669,32 @@ void player_resting_set_count(struct player *p, s16b count)
 {
 	/* Cancel if player is disturbed */
 	if (player_rest_disturb) {
-		resting = 0;
+		p->upkeep->resting = 0;
 		player_rest_disturb = FALSE;
 		return;
 	}
 
 	/* Ignore if the rest count is negative. */
 	if ((count < 0) && !player_resting_is_special(count)) {
-		resting = 0;
+		p->upkeep->resting = 0;
 		return;
 	}
 
 	/* Save the rest code */
-	resting = count;
+	p->upkeep->resting = count;
 
 	/* Truncate overlarge values */
-	if (resting > 9999) resting = 9999;
+	if (p->upkeep->resting > 9999) p->upkeep->resting = 9999;
 }
 
 /**
  * Cancel current rest.
  */
-void player_resting_cancel(struct player *p)
+void player_resting_cancel(struct player *p, bool disturb)
 {
 	player_resting_set_count(p, 0);
 	player_turns_rested = 0;
-	player_rest_disturb = TRUE;
+	player_rest_disturb = disturb;
 }
 
 /**
@@ -711,7 +704,7 @@ void player_resting_cancel(struct player *p)
 bool player_resting_can_regenerate(struct player *p)
 {
 	return player_turns_rested >= REST_REQUIRED_FOR_REGEN ||
-		player_resting_is_special(resting);
+		player_resting_is_special(p->upkeep->resting);
 }
 
 /**
@@ -722,9 +715,9 @@ bool player_resting_can_regenerate(struct player *p)
 void player_resting_step_turn(struct player *p)
 {
 	/* Timed rest */
-	if (resting > 0) {
+	if (p->upkeep->resting > 0) {
 		/* Reduce rest count */
-		resting--;
+		p->upkeep->resting--;
 
 		/* Redraw the state */
 		p->upkeep->redraw |= (PR_STATE);
@@ -745,12 +738,12 @@ void player_resting_step_turn(struct player *p)
 void player_resting_complete_special(struct player *p)
 {
 	/* Complete resting */
-	if (player_resting_is_special(resting)) {
-		if (resting == REST_ALL_POINTS) {
+	if (player_resting_is_special(p->upkeep->resting)) {
+		if (p->upkeep->resting == REST_ALL_POINTS) {
 			if ((p->chp == p->mhp) && (p->csp == p->msp))
 				/* Stop resting */
 				disturb(p, 0);
-		} else if (resting == REST_COMPLETE) {
+		} else if (p->upkeep->resting == REST_COMPLETE) {
 			if ((p->chp == p->mhp) && (p->csp == p->msp) &&
 				!p->timed[TMD_BLIND] && !p->timed[TMD_CONFUSED] &&
 				!p->timed[TMD_POISONED] && !p->timed[TMD_AFRAID] &&
@@ -760,12 +753,35 @@ void player_resting_complete_special(struct player *p)
 				!p->word_recall)
 				/* Stop resting */
 				disturb(p, 0);
-		} else if (resting == REST_SOME_POINTS) {
+		} else if (p->upkeep->resting == REST_SOME_POINTS) {
 			if ((p->chp == p->mhp) || (p->csp == p->msp))
 				/* Stop resting */
 				disturb(p, 0);
 		}
 	}
+}
+
+/* Record the player's last rest count for repeating */
+static int player_resting_repeat_count = 0;
+
+/**
+ * Get the number of resting turns to repeat.
+ *
+ * \param count is the number of turns requested for rest most recently.
+ */
+int player_get_resting_repeat_count(struct player *p)
+{
+	return player_resting_repeat_count;
+}
+
+/**
+ * Set the number of resting turns to repeat.
+ *
+ * \param count is the number of turns requested for rest most recently.
+ */
+void player_set_resting_repeat_count(struct player *p, s16b count)
+{
+	player_resting_repeat_count = count;
 }
 
 /**
@@ -842,7 +858,7 @@ void disturb(struct player *p, int stop_search)
 
 	/* Cancel Resting */
 	if (player_is_resting(p)) {
-		player_resting_cancel(p);
+		player_resting_cancel(p, TRUE);
 		p->upkeep->redraw |= PR_STATE;
 	}
 

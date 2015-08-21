@@ -1,6 +1,6 @@
 /**
  * \file init.c
- * \brief Various game initialistion routines
+ * \brief Various game initialization routines
  *
  * Copyright (c) 1997 Ben Harrison
  *
@@ -18,8 +18,8 @@
  * This file is used to initialize various variables and arrays for the
  * Angband game.
  *
- * Several of the arrays for Angband are built from "template" files in
- * the "lib/edit" directory.
+ * Several of the arrays for Angband are built from data files in the
+ * "lib/gamedata" directory.
  */
 
 
@@ -69,26 +69,21 @@ struct angband_constants *z_info;
  */
 const char *ANGBAND_SYS = "xxx";
 
-/*
+/**
  * Various directories. These are no longer necessarily all subdirs of "lib"
  */
-char *ANGBAND_DIR_APEX;
-char *ANGBAND_DIR_EDIT;
-char *ANGBAND_DIR_FILE;
+char *ANGBAND_DIR_GAMEDATA;
+char *ANGBAND_DIR_CUSTOMIZE;
 char *ANGBAND_DIR_HELP;
-char *ANGBAND_DIR_INFO;
-char *ANGBAND_DIR_SAVE;
-char *ANGBAND_DIR_PREF;
+char *ANGBAND_DIR_SCREENS;
+char *ANGBAND_DIR_FONTS;
+char *ANGBAND_DIR_TILES;
+char *ANGBAND_DIR_SOUNDS;
+char *ANGBAND_DIR_ICONS;
 char *ANGBAND_DIR_USER;
-char *ANGBAND_DIR_XTRA;
-
-/*
- * Various xtra/ subdirectories.
- */
-char *ANGBAND_DIR_XTRA_FONT;
-char *ANGBAND_DIR_XTRA_GRAF;
-char *ANGBAND_DIR_XTRA_SOUND;
-char *ANGBAND_DIR_XTRA_ICON;
+char *ANGBAND_DIR_SAVE;
+char *ANGBAND_DIR_SCORES;
+char *ANGBAND_DIR_INFO;
 
 static struct history_chart *histories;
 
@@ -157,7 +152,7 @@ static const char *slay_names[] = {
 
 static const char *effect_list[] = {
 	"NONE",
-	#define EFFECT(x, a, b, d)	#x,
+	#define EFFECT(x, a, b, c, d, e)	#x,
 	#include "list-effects.h"
 	#undef EFFECT
 	"MAX"
@@ -204,7 +199,7 @@ errr grab_effect_data(struct parser *p, struct effect *effect)
 			return PARSE_ERROR_UNRECOGNISED_PARAMETER;
 
 		/* Check for a value */
-		val = effect_param(type);
+		val = effect_param(effect->index, type);
 		if (val < 0)
 			return PARSE_ERROR_INVALID_VALUE;
 		else
@@ -283,9 +278,10 @@ static enum parser_error write_dummy_object_record(struct artifact *art, const c
 	dummy->tval = art->tval;
 	dummy->base = &kb_info[dummy->tval];
 
-	/* Make the name */
+	/* Make the name and index */
 	my_strcpy(mod_name, format("& %s~", name), sizeof(mod_name));
 	dummy->name = string_make(mod_name);
+	dummy->kidx = z_info->k_max - 1;
 
 	/* Increase the sval count for this tval, set the new one to the max */
 	for (i = 0; i < TV_MAX; i++)
@@ -326,7 +322,7 @@ static enum parser_error write_dummy_object_record(struct artifact *art, const c
  *
  * Various command line options may allow some of the important
  * directories to be changed to user-specified directories, most
- * importantly, the "apex" and "user" and "save" directories,
+ * importantly, the "scores" and "user" and "save" directories,
  * but this is done after this function, see "main.c".
  *
  * In general, the initial path should end in the appropriate "PATH_SEP"
@@ -342,43 +338,35 @@ static enum parser_error write_dummy_object_record(struct artifact *art, const c
  */
 void init_file_paths(const char *configpath, const char *libpath, const char *datapath)
 {
-#ifdef PRIVATE_USER_PATH
 	char buf[1024];
-#endif /* PRIVATE_USER_PATH */
 
 	/*** Free everything ***/
 
 	/* Free the sub-paths */
-	string_free(ANGBAND_DIR_APEX);
-	string_free(ANGBAND_DIR_EDIT);
-	string_free(ANGBAND_DIR_FILE);
+	string_free(ANGBAND_DIR_GAMEDATA);
+	string_free(ANGBAND_DIR_CUSTOMIZE);
 	string_free(ANGBAND_DIR_HELP);
-	string_free(ANGBAND_DIR_INFO);
-	string_free(ANGBAND_DIR_SAVE);
-	string_free(ANGBAND_DIR_PREF);
+	string_free(ANGBAND_DIR_SCREENS);
+	string_free(ANGBAND_DIR_FONTS);
+	string_free(ANGBAND_DIR_TILES);
+	string_free(ANGBAND_DIR_SOUNDS);
+	string_free(ANGBAND_DIR_ICONS);
 	string_free(ANGBAND_DIR_USER);
-	string_free(ANGBAND_DIR_XTRA);
-
-	string_free(ANGBAND_DIR_XTRA_FONT);
-	string_free(ANGBAND_DIR_XTRA_GRAF);
-	string_free(ANGBAND_DIR_XTRA_SOUND);
-	string_free(ANGBAND_DIR_XTRA_ICON);
+	string_free(ANGBAND_DIR_SAVE);
+	string_free(ANGBAND_DIR_SCORES);
+	string_free(ANGBAND_DIR_INFO);
 
 	/*** Prepare the paths ***/
 
 	/* Build path names */
-	ANGBAND_DIR_EDIT = string_make(format("%sedit", configpath));
-	ANGBAND_DIR_FILE = string_make(format("%sfile", libpath));
+	ANGBAND_DIR_GAMEDATA = string_make(format("%sgamedata", configpath));
+	ANGBAND_DIR_CUSTOMIZE = string_make(format("%scustomize", configpath));
 	ANGBAND_DIR_HELP = string_make(format("%shelp", libpath));
-	ANGBAND_DIR_INFO = string_make(format("%sinfo", libpath));
-	ANGBAND_DIR_PREF = string_make(format("%spref", configpath));
-	ANGBAND_DIR_XTRA = string_make(format("%sxtra", libpath));
-
-	/* Build xtra/ paths */
-	ANGBAND_DIR_XTRA_FONT = string_make(format("%s" PATH_SEP "font", ANGBAND_DIR_XTRA));
-	ANGBAND_DIR_XTRA_GRAF = string_make(format("%s" PATH_SEP "graf", ANGBAND_DIR_XTRA));
-	ANGBAND_DIR_XTRA_SOUND = string_make(format("%s" PATH_SEP "sound", ANGBAND_DIR_XTRA));
-	ANGBAND_DIR_XTRA_ICON = string_make(format("%s" PATH_SEP "icon", ANGBAND_DIR_XTRA));
+	ANGBAND_DIR_SCREENS = string_make(format("%sscreens", libpath));
+	ANGBAND_DIR_FONTS = string_make(format("%sfonts", libpath));
+	ANGBAND_DIR_TILES = string_make(format("%stiles", libpath));
+	ANGBAND_DIR_SOUNDS = string_make(format("%ssounds", libpath));
+	ANGBAND_DIR_ICONS = string_make(format("%sicons", libpath));
 
 #ifdef PRIVATE_USER_PATH
 
@@ -389,26 +377,42 @@ void init_file_paths(const char *configpath, const char *libpath, const char *da
 		path_build(buf, sizeof(buf), PRIVATE_USER_PATH, VERSION_NAME);
 	ANGBAND_DIR_USER = string_make(buf);
 
+#else /* !PRIVATE_USER_PATH */
+
+#ifdef MACH_O_CARBON
+	ANGBAND_DIR_USER = string_make(datapath);
+#else /* !MACH_O_CARBON */
+	ANGBAND_DIR_USER = string_make(format("%suser", datapath));
+#endif /* MACH_O_CARBON */
+
+#endif /* PRIVATE_USER_PATH */
+
+	/* Build the path to the user info directory */
+	path_build(buf, sizeof(buf), ANGBAND_DIR_USER, "info");
+	ANGBAND_DIR_INFO = string_make(buf);
+
+#ifdef USE_PRIVATE_PATHS
+
+    /* Build the path to the score and save directories */
 	path_build(buf, sizeof(buf), ANGBAND_DIR_USER, "scores");
-	ANGBAND_DIR_APEX = string_make(buf);
+	ANGBAND_DIR_SCORES = string_make(buf);
 
 	path_build(buf, sizeof(buf), ANGBAND_DIR_USER, "save");
 	ANGBAND_DIR_SAVE = string_make(buf);
 
-#else /* !PRIVATE_USER_PATH */
+#else /* !USE_PRIVATE_PATHS */
 
 	/* Build pathnames */
-	ANGBAND_DIR_USER = string_make(format("%suser", datapath));
-	ANGBAND_DIR_APEX = string_make(format("%sapex", datapath));
+	ANGBAND_DIR_SCORES = string_make(format("%sscores", datapath));
 	ANGBAND_DIR_SAVE = string_make(format("%ssave", datapath));
 
-#endif /* PRIVATE_USER_PATH */
+#endif /* USE_PRIVATE_PATHS */
 }
 
 
 /**
  * Create any missing directories. We create only those dirs which may be
- * empty (user/, save/, apex/, info/, help/). The others are assumed 
+ * empty (user/, save/, scores/, info/, help/). The others are assumed 
  * to contain required files and therefore must exist at startup 
  * (edit/, pref/, file/, xtra/).
  *
@@ -424,7 +428,7 @@ void create_needed_dirs(void)
 	path_build(dirpath, sizeof(dirpath), ANGBAND_DIR_SAVE, "");
 	if (!dir_create(dirpath)) quit_fmt("Cannot create '%s'", dirpath);
 
-	path_build(dirpath, sizeof(dirpath), ANGBAND_DIR_APEX, "");
+	path_build(dirpath, sizeof(dirpath), ANGBAND_DIR_SCORES, "");
 	if (!dir_create(dirpath)) quit_fmt("Cannot create '%s'", dirpath);
 
 	path_build(dirpath, sizeof(dirpath), ANGBAND_DIR_INFO, "");
@@ -736,7 +740,7 @@ static struct file_parser constants_parser = {
 };
 
 /**
- * Initialise game constants.
+ * Initialize game constants.
  *
  * Assumption: Paths are set up correctly before calling this function.
  */
@@ -744,7 +748,7 @@ void init_game_constants(void)
 {
 	event_signal_message(EVENT_INITSTATUS, 0, "Initializing constants");
 	if (run_parser(&constants_parser))
-		quit_fmt("Cannot initialise constants.");
+		quit_fmt("Cannot initialize constants.");
 }
 
 /**
@@ -759,8 +763,8 @@ static void cleanup_game_constants(void)
  * Parsing functions for object_base.txt
  */
 struct kb_parsedata {
-	object_base defaults;
-	object_base *kb;
+	struct object_base defaults;
+	struct object_base *kb;
 };
 
 static enum parser_error parse_object_base_defaults(struct parser *p) {
@@ -1235,6 +1239,7 @@ static enum parser_error parse_object_values(struct parser *p) {
 			b->name = string_make(brand_names[index]);
 			b->element = index;
 			b->multiplier = value;
+			b->known = TRUE;
 			b->next = k->brands;
 			k->brands = b;
 		}
@@ -1245,6 +1250,7 @@ static enum parser_error parse_object_values(struct parser *p) {
 			s->name = string_make(slay_names[index]);
 			s->race_flag = index;
 			s->multiplier = value;
+			s->known = TRUE;
 			s->next = k->slays;
 			k->slays = s;
 		} else if (!grab_base_and_int(&value, &name, t)) {
@@ -1253,6 +1259,7 @@ static enum parser_error parse_object_values(struct parser *p) {
 			s = mem_zalloc(sizeof *s);
 			s->name = string_make(name);
 			s->multiplier = value;
+			s->known = TRUE;
 			s->next = k->slays;
 			k->slays = s;
 		}
@@ -1410,8 +1417,30 @@ static enum parser_error parse_act_effect(struct parser *p) {
 	return grab_effect_data(p, new_effect);
 }
 
+static enum parser_error parse_act_param(struct parser *p) {
+	struct activation *act = parser_priv(p);
+	struct effect *effect = act->effect;
+
+	if (!act)
+		return PARSE_ERROR_MISSING_RECORD_HEADER;
+
+	/* If there is no effect, assume that this is human and not parser error. */
+	if (effect == NULL)
+		return PARSE_ERROR_NONE;
+
+	while (effect->next) effect = effect->next;
+	effect->params[1] = parser_getint(p, "p2");
+
+	if (parser_hasval(p, "p3"))
+		effect->params[2] = parser_getint(p, "p3");
+
+	return PARSE_ERROR_NONE;
+}
+
+
 static enum parser_error parse_act_dice(struct parser *p) {
 	struct activation *act = parser_priv(p);
+	struct effect *effect = act->effect;
 	dice_t *dice = NULL;
 	const char *string = NULL;
 
@@ -1423,10 +1452,13 @@ static enum parser_error parse_act_dice(struct parser *p) {
 	if (dice == NULL)
 		return PARSE_ERROR_INVALID_DICE;
 
+	/* Go to the correct effect */
+	while (effect->next) effect = effect->next;
+
 	string = parser_getstr(p, "dice");
 
 	if (dice_parse_string(dice, string)) {
-		act->effect->dice = dice;
+		effect->dice = dice;
 	}
 	else {
 		dice_free(dice);
@@ -1440,6 +1472,7 @@ static enum parser_error parse_act_expr(struct parser *p) {
 	struct activation *act = parser_priv(p);
 	expression_t *expression = NULL;
 	expression_base_value_f function = NULL;
+	struct effect *effect = act->effect;
 	const char *name;
 	const char *base;
 	const char *expr;
@@ -1450,6 +1483,9 @@ static enum parser_error parse_act_expr(struct parser *p) {
 	/* If there are no dice, assume that this is human and not parser error. */
 	if (act->effect->dice == NULL)
 		return PARSE_ERROR_NONE;
+
+	/* Go to the correct effect */
+	while (effect->next) effect = effect->next;
 
 	name = parser_getsym(p, "name");
 	base = parser_getsym(p, "base");
@@ -1465,7 +1501,7 @@ static enum parser_error parse_act_expr(struct parser *p) {
 	if (expression_add_operations_string(expression, expr) < 0)
 		return PARSE_ERROR_BAD_EXPRESSION_STRING;
 
-	if (dice_bind_expression(act->effect->dice, name, expression) < 0)
+	if (dice_bind_expression(effect->dice, name, expression) < 0)
 		return PARSE_ERROR_UNBOUND_EXPRESSION;
 
 	/* The dice object makes a deep copy of the expression, so we can free it */
@@ -1499,6 +1535,7 @@ struct parser *init_parse_act(void) {
 	parser_reg(p, "aim uint aim", parse_act_aim);
 	parser_reg(p, "power uint power", parse_act_power);
 	parser_reg(p, "effect sym eff ?sym type ?int xtra", parse_act_effect);
+	parser_reg(p, "param int p2 ?int p3", parse_act_param);
 	parser_reg(p, "dice str dice", parse_act_dice);
 	parser_reg(p, "expr sym name sym base str expr", parse_act_expr);
 	parser_reg(p, "msg str msg", parse_act_msg);
@@ -2159,7 +2196,7 @@ static errr finish_parse_trap(struct parser *p) {
 			z_info->trap_max = t->tidx;
 		t = t->next;
 	}
-	
+
 	z_info->trap_max += 1;
 	trap_info = mem_zalloc((z_info->trap_max) * sizeof(*t));
     for (t = parser_priv(p); t; t = t->next) {
@@ -2291,6 +2328,14 @@ static enum parser_error parse_feat_info(struct parser *p) {
 	return PARSE_ERROR_NONE;
 }
 
+static enum parser_error parse_feat_desc(struct parser *p) {
+    struct feature *f = parser_priv(p);
+    assert(f);
+
+    f->desc = string_append(f->desc, parser_getstr(p, "text"));
+    return PARSE_ERROR_NONE;
+}
+
 struct parser *init_parse_feat(void) {
 	struct parser *p = parser_new();
 	parser_setpriv(p, NULL);
@@ -2300,6 +2345,7 @@ struct parser *init_parse_feat(void) {
 	parser_reg(p, "priority uint priority", parse_feat_priority);
 	parser_reg(p, "flags ?str flags", parse_feat_flags);
 	parser_reg(p, "info int shopnum int dig", parse_feat_info);
+    parser_reg(p, "desc str text", parse_feat_desc);
 	return p;
 }
 
@@ -2342,6 +2388,7 @@ static errr finish_parse_feat(struct parser *p) {
 static void cleanup_feat(void) {
 	int idx;
 	for (idx = 0; idx < z_info->f_max; idx++) {
+		string_free(f_info[idx].desc);
 		string_free(f_info[idx].name);
 	}
 	mem_free(f_info);
@@ -3367,7 +3414,7 @@ static enum parser_error parse_class_magic(struct parser *p) {
 	c->magic.spell_weight = parser_getuint(p, "weight");
 	c->magic.spell_realm = &realms[parser_getuint(p, "realm")];
 	num_books = parser_getuint(p, "books");
-	c->magic.books = mem_zalloc(num_books * sizeof(class_book));
+	c->magic.books = mem_zalloc(num_books * sizeof(struct class_book));
 	return PARSE_ERROR_NONE;
 }
 
@@ -3390,7 +3437,7 @@ static enum parser_error parse_class_book(struct parser *p) {
 	c->magic.books[c->magic.num_books].sval = sval;
 	spells = parser_getuint(p, "spells");
 	c->magic.books[c->magic.num_books].spells =
-		mem_zalloc(spells * sizeof(class_spell));
+		mem_zalloc(spells * sizeof(struct class_spell));
 	c->magic.books[c->magic.num_books++].realm = parser_getuint(p, "realm");
 
 	return PARSE_ERROR_NONE;
@@ -3398,7 +3445,7 @@ static enum parser_error parse_class_book(struct parser *p) {
 
 static enum parser_error parse_class_spell(struct parser *p) {
 	struct player_class *c = parser_priv(p);
-	class_book *book = &c->magic.books[c->magic.num_books - 1];
+	struct class_book *book = &c->magic.books[c->magic.num_books - 1];
 
 	if (!c)
 		return PARSE_ERROR_MISSING_RECORD_HEADER;
@@ -3416,8 +3463,8 @@ static enum parser_error parse_class_spell(struct parser *p) {
 
 static enum parser_error parse_class_effect(struct parser *p) {
 	struct player_class *c = parser_priv(p);
-	class_book *book = &c->magic.books[c->magic.num_books - 1];
-	class_spell *spell = &book->spells[book->num_spells - 1];
+	struct class_book *book = &c->magic.books[c->magic.num_books - 1];
+	struct class_spell *spell = &book->spells[book->num_spells - 1];
 	struct effect *effect;
 	struct effect *new_effect = mem_zalloc(sizeof(*effect));
 
@@ -3439,8 +3486,8 @@ static enum parser_error parse_class_effect(struct parser *p) {
 
 static enum parser_error parse_class_param(struct parser *p) {
 	struct player_class *c = parser_priv(p);
-	class_book *book = &c->magic.books[c->magic.num_books - 1];
-	class_spell *spell = &book->spells[book->num_spells - 1];
+	struct class_book *book = &c->magic.books[c->magic.num_books - 1];
+	struct class_spell *spell = &book->spells[book->num_spells - 1];
 	struct effect *effect = spell->effect;
 
 	if (!c)
@@ -3462,8 +3509,8 @@ static enum parser_error parse_class_param(struct parser *p) {
 
 static enum parser_error parse_class_dice(struct parser *p) {
 	struct player_class *c = parser_priv(p);
-	class_book *book = &c->magic.books[c->magic.num_books - 1];
-	class_spell *spell = &book->spells[book->num_spells - 1];
+	struct class_book *book = &c->magic.books[c->magic.num_books - 1];
+	struct class_spell *spell = &book->spells[book->num_spells - 1];
 	struct effect *effect = spell->effect;
 	dice_t *dice = NULL;
 	const char *string = NULL;
@@ -3497,8 +3544,8 @@ static enum parser_error parse_class_dice(struct parser *p) {
 
 static enum parser_error parse_class_expr(struct parser *p) {
 	struct player_class *c = parser_priv(p);
-	class_book *book = &c->magic.books[c->magic.num_books - 1];
-	class_spell *spell = &book->spells[book->num_spells - 1];
+	struct class_book *book = &c->magic.books[c->magic.num_books - 1];
+	struct class_spell *spell = &book->spells[book->num_spells - 1];
 	struct effect *effect = spell->effect;
 	expression_t *expression = NULL;
 	expression_base_value_f function = NULL;
@@ -3544,8 +3591,8 @@ static enum parser_error parse_class_expr(struct parser *p) {
 
 static enum parser_error parse_class_desc(struct parser *p) {
 	struct player_class *c = parser_priv(p);
-	class_book *book = &c->magic.books[c->magic.num_books - 1];
-	class_spell *spell = &book->spells[book->num_spells - 1];
+	struct class_book *book = &c->magic.books[c->magic.num_books - 1];
+	struct class_spell *spell = &book->spells[book->num_spells - 1];
 
 	if (!c)
 		return PARSE_ERROR_MISSING_RECORD_HEADER;
@@ -3600,8 +3647,8 @@ static void cleanup_class(void)
 	struct player_class *c = classes;
 	struct player_class *next;
 	struct start_item *item, *item_next;
-	class_spell *spell;
-	class_book *book;
+	struct class_spell *spell;
+	struct class_book *book;
 	int i, j;
 
 	while (c) {
@@ -3845,7 +3892,7 @@ static struct file_parser flavor_parser = {
 
 
 /**
- * Initialise hints
+ * Initialize hints
  */
 static enum parser_error parse_hint(struct parser *p) {
 	struct hint *h = parser_priv(p);
@@ -3896,7 +3943,7 @@ static struct file_parser hints_parser = {
 };
 
 /**
- * Initialise monster pain messages
+ * Initialize monster pain messages
  */
 static enum parser_error parse_pain_type(struct parser *p) {
 	struct monster_pain *h = parser_priv(p);
@@ -4032,7 +4079,7 @@ static enum parser_error parse_pit_obj_rarity(struct parser *p) {
 static enum parser_error parse_pit_mon_base(struct parser *p) {
 	struct pit_profile *pit = parser_priv(p);
 	struct pit_monster_profile *bases;
-	monster_base *base = lookup_monster_base(parser_getsym(p, "base"));
+	struct monster_base *base = lookup_monster_base(parser_getsym(p, "base"));
 
 	if (!pit)
 		return PARSE_ERROR_MISSING_RECORD_HEADER;
@@ -4049,7 +4096,7 @@ static enum parser_error parse_pit_mon_base(struct parser *p) {
 static enum parser_error parse_pit_mon_ban(struct parser *p) {
 	struct pit_profile *pit = parser_priv(p);
 	struct pit_forbidden_monster *monsters;
-	monster_race *r = lookup_monster(parser_getsym(p, "race"));
+	struct monster_race *r = lookup_monster(parser_getsym(p, "race"));
 
 	if (!pit)
 		return PARSE_ERROR_MISSING_RECORD_HEADER;
@@ -4302,7 +4349,7 @@ static struct {
 };
 
 /**
- * Initialise just the internal arrays.
+ * Initialize just the internal arrays.
  * This should be callable by the test suite, without relying on input, or
  * anything to do with a user or savefiles.
  *
@@ -4316,7 +4363,7 @@ void init_arrays(void)
 
 		event_signal_message(EVENT_INITSTATUS, 0, format("Initializing %s...", pl[i].name));
 		if (run_parser(pl[i].parser))
-			quit_fmt("Cannot initialise %s.", pl[i].name);
+			quit_fmt("Cannot initialize %s.", pl[i].name);
 	}
 }
 
@@ -4442,18 +4489,16 @@ void cleanup_angband(void)
 	vformat_kill();
 
 	/* Free the directories */
-	string_free(ANGBAND_DIR_APEX);
-	string_free(ANGBAND_DIR_EDIT);
-	string_free(ANGBAND_DIR_FILE);
+	string_free(ANGBAND_DIR_GAMEDATA);
+	string_free(ANGBAND_DIR_CUSTOMIZE);
 	string_free(ANGBAND_DIR_HELP);
-	string_free(ANGBAND_DIR_INFO);
-	string_free(ANGBAND_DIR_SAVE);
-	string_free(ANGBAND_DIR_PREF);
+	string_free(ANGBAND_DIR_SCREENS);
+	string_free(ANGBAND_DIR_FONTS);
+	string_free(ANGBAND_DIR_TILES);
+	string_free(ANGBAND_DIR_SOUNDS);
+	string_free(ANGBAND_DIR_ICONS);
 	string_free(ANGBAND_DIR_USER);
-	string_free(ANGBAND_DIR_XTRA);
-
-	string_free(ANGBAND_DIR_XTRA_FONT);
-	string_free(ANGBAND_DIR_XTRA_GRAF);
-	string_free(ANGBAND_DIR_XTRA_SOUND);
-	string_free(ANGBAND_DIR_XTRA_ICON);
+	string_free(ANGBAND_DIR_SAVE);
+	string_free(ANGBAND_DIR_SCORES);
+	string_free(ANGBAND_DIR_INFO);
 }

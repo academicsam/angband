@@ -122,7 +122,7 @@ enum
  */
 enum
 {
-    #define RSF(a, b, c, d, e, f, g, h) RSF_##a,
+    #define RSF(a, b) RSF_##a,
     #include "list-mon-spells.h"
     #undef RSF
 };
@@ -147,13 +147,12 @@ struct monster_blow {
 /**
  * Monster pain messages
  */
-typedef struct monster_pain
-{
+struct monster_pain {
 	const char *messages[7];
 	int pain_idx;
 	
 	struct monster_pain *next;
-} monster_pain;
+};
 
 
 /**
@@ -163,6 +162,12 @@ struct monster_spell {
 	struct monster_spell *next;
 
 	u16b index;				/* Numerical index (RSF_FOO) */
+	int msgt;				/* Flag for message colouring */
+	char *message;			/* Description of the attack */
+	char *blind_message;	/* Description of the attack if unseen */
+	char *miss_message;		/* Description of a missed attack */
+	char *save_message;		/* Message on passing saving throw, if any */
+	char *lore_desc;		/* Description of the attack used in lore text */
 	int hit;				/* To-hit level for the attack */
 	struct effect *effect;	/* Effect(s) of the spell */
 	random_value power;		/* Relative power of the spell */
@@ -172,8 +177,7 @@ struct monster_spell {
 /**
  * Base monster type
  */
-typedef struct monster_base
-{
+struct monster_base {
 	struct monster_base *next;
 
 	char *name;						/* Name for recognition in code */
@@ -184,8 +188,8 @@ typedef struct monster_base
 	
 	wchar_t d_char;					/* Default monster character */
 
-	monster_pain *pain;				/* Pain messages */
-} monster_base;
+	struct monster_pain *pain;				/* Pain messages */
+};
 
 
 /**
@@ -246,8 +250,7 @@ struct monster_mimic {
  * Maybe "cur_num", and "max_num" should be moved out of this array since
  * they are not read from "monster.txt".
  */
-typedef struct monster_race
-{
+struct monster_race {
 	struct monster_race *next;
 
 	unsigned int ridx;
@@ -295,7 +298,7 @@ typedef struct monster_race
     struct monster_friends_base *friends_base;
     
 	struct monster_mimic *mimic_kinds;
-} monster_race;
+};
 
 
 /**
@@ -306,8 +309,7 @@ typedef struct monster_race
  * The "held_obj" field points to the first object of a stack
  * of objects (if any) being carried by the monster (see above).
  */
-typedef struct monster
-{
+struct monster {
 	struct monster_race *race;
 	int midx;
 
@@ -331,23 +333,23 @@ typedef struct monster
 
 	byte attr;  		/* attr last used for drawing monster */
 
-	player_state known_pstate; /* Known player state */
+	struct player_state known_pstate; /* Known player state */
 
     byte ty;		/**< Monster target */
     byte tx;
 
     byte min_range;	/**< What is the closest we want to be?  Not saved */
     byte best_range;	/**< How close do we want to be? Not saved */
-} monster_type;
+};
 
 /** Variables **/
 
 extern s16b num_repro;
 
-extern monster_pain *pain_messages;
+extern struct monster_pain *pain_messages;
 extern struct monster_spell *monster_spells;
-extern monster_base *rb_info;
-extern monster_race *r_info;
-extern const monster_race *ref_race;
+extern struct monster_base *rb_info;
+extern struct monster_race *r_info;
+extern const struct monster_race *ref_race;
 
 #endif /* !MONSTER_MONSTER_H */

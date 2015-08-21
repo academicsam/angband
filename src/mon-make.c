@@ -30,6 +30,7 @@
 #include "obj-pile.h"
 #include "obj-tval.h"
 #include "obj-util.h"
+#include "player-calcs.h"
 #include "player-history.h"
 #include "player-quest.h"
 #include "target.h"
@@ -168,13 +169,14 @@ void delete_monster_idx(int m_idx)
 			obj->artifact->created = FALSE;
 
 		/* Delete the object */
-		object_delete(obj);
+		object_delete(&obj);
 		obj = next;
 	}
 
 	/* Delete mimicked objects */
 	if (mon->mimicked_obj) {
-		object_delete(mon->mimicked_obj);
+		square_excise_object(cave, y, x, mon->mimicked_obj);
+		object_delete(&mon->mimicked_obj);
 	}
 
 	/* Wipe the Monster */
@@ -340,8 +342,8 @@ void compact_monsters(int num_to_compact)
  * This is an efficient method of simulating multiple calls to the
  * "delete_monster()" function, with no visual effects.
  *
- * Note that we do not delete the objects the monsters are carrying;
- * that must be taken care of separately via wipe_o_list().
+ * Note that we must delete the objects the monsters are carrying, but we
+ * do nothing with mimicked objects.
  */
 void wipe_mon_list(struct chunk *c, struct player *p)
 {
@@ -354,7 +356,10 @@ void wipe_mon_list(struct chunk *c, struct player *p)
 		/* Skip dead monsters */
 		if (!mon->race) continue;
 
-		/* Hack -- Reduce the racial counter */
+		/* Delete all the objects */
+		object_pile_free(mon->held_obj);
+
+		/* Reduce the racial counter */
 		mon->race->cur_num--;
 
 		/* Monster is gone */
@@ -642,7 +647,7 @@ static bool mon_create_drop(struct chunk *c, struct monster *mon, byte origin)
 
 	int number = 0, level, j, monlevel;
 
-	object_type *i_ptr;
+	struct object *obj;
 	
 	assert(mon);
 
@@ -672,53 +677,53 @@ static bool mon_create_drop(struct chunk *c, struct monster *mon, byte origin)
 			continue;
 
 		/* Allocate by hand, prep, apply magic */
-		i_ptr = mem_zalloc(sizeof(*i_ptr));
+		obj = mem_zalloc(sizeof(*obj));
 		if (drop->artifact) {
-			object_prep(i_ptr, lookup_kind(drop->artifact->tval,
+			object_prep(obj, lookup_kind(drop->artifact->tval,
 				drop->artifact->sval), level, RANDOMISE);
-			i_ptr->artifact = drop->artifact;
-			copy_artifact_data(i_ptr, i_ptr->artifact);
-			i_ptr->artifact->created = 1;
+			obj->artifact = drop->artifact;
+			copy_artifact_data(obj, obj->artifact);
+			obj->artifact->created = TRUE;
 		} else {
-			object_prep(i_ptr, drop->kind, level, RANDOMISE);
-			apply_magic(i_ptr, level, TRUE, good, great, extra_roll);
+			object_prep(obj, drop->kind, level, RANDOMISE);
+			apply_magic(obj, level, TRUE, good, great, extra_roll);
 		}
 
 		/* Set origin details */
-		i_ptr->origin = origin;
-		i_ptr->origin_depth = player->depth;
-		i_ptr->origin_xtra = mon->race->ridx;
-		i_ptr->number = randint0(drop->max - drop->min) + drop->min;
+		obj->origin = origin;
+		obj->origin_depth = player->depth;
+		obj->origin_xtra = mon->race->ridx;
+		obj->number = randint0(drop->max - drop->min) + drop->min;
 
 		/* Try to carry */
-		if (monster_carry(c, mon, i_ptr))
+		if (monster_carry(c, mon, obj))
 			any = TRUE;
 		else {
-			i_ptr->artifact->created = 0;
-			mem_free(i_ptr);
+			obj->artifact->created = FALSE;
+			mem_free(obj);
 		}
 	}
 
 	/* Make some objects */
 	for (j = 0; j < number; j++) {
 		if (gold_ok && (!item_ok || (randint0(100) < 50))) {
-			i_ptr = make_gold(level, "any");
+			obj = make_gold(level, "any");
 		} else {
-			i_ptr = make_object(c, level, good, great, extra_roll, NULL, 0);
-			if (!i_ptr) continue;
+			obj = make_object(c, level, good, great, extra_roll, NULL, 0);
+			if (!obj) continue;
 		}
 
 		/* Set origin details */
-		i_ptr->origin = origin;
-		i_ptr->origin_depth = player->depth;
-		i_ptr->origin_xtra = mon->race->ridx;
+		obj->origin = origin;
+		obj->origin_depth = player->depth;
+		obj->origin_xtra = mon->race->ridx;
 
 		/* Try to carry */
-		if (monster_carry(c, mon, i_ptr))
+		if (monster_carry(c, mon, obj))
 			any = TRUE;
 		else {
-			i_ptr->artifact->created = 0;
-			mem_free(i_ptr);
+			obj->artifact->created = FALSE;
+			mem_free(obj);
 		}
 	}
 
@@ -793,16 +798,16 @@ s16b place_monster(struct chunk *c, int y, int x, struct monster *mon,
 		}
 
 		if (tval_is_money_k(kind)) {
-			obj = make_gold(player->depth,
-							  lookup_kind(TV_GOLD, kind->sval)->name);
+			obj = make_gold(player->depth, kind->name);
 		} else {
 			obj = object_new();
 			object_prep(obj, kind, new_mon->race->level, RANDOMISE);
 			apply_magic(obj, new_mon->race->level, TRUE, FALSE, FALSE, FALSE);
 			obj->number = 1;
+			obj->origin = ORIGIN_DROP_MIMIC;
+			obj->origin_depth = player->depth;
 		}
 
-		obj->origin = origin;
 		obj->mimicking_m_idx = m_idx;
 		new_mon->mimicked_obj = obj;
 		floor_carry(c, y, x, obj, FALSE);
@@ -879,6 +884,10 @@ static bool place_new_monster_one(struct chunk *c, int y, int x,
 
 	/* Not where monsters already are */
 	if (square_monster(c, y, x))
+		return FALSE;
+
+	/* Not where the player already is */
+	if ((player->py == y) && (player->px == x))
 		return FALSE;
 
 	/* Prevent monsters from being placed where they cannot walk, but allow other feature types */
@@ -996,7 +1005,8 @@ static bool place_new_monster_one(struct chunk *c, int y, int x,
  * ORIGIN_DROP_PIT, etc.) 
  */
 static bool place_new_monster_group(struct chunk *c, int y, int x, 
-		struct monster_race *race, bool sleep, int total, byte origin)
+									struct monster_race *race, bool sleep,
+									int total, byte origin)
 {
 	int n, i;
 
@@ -1044,7 +1054,7 @@ static bool place_new_monster_group(struct chunk *c, int y, int x,
 /* Maximum distance from center for a group of monsters */
 #define GROUP_DISTANCE 5 
 
-static monster_base *place_monster_base = NULL;
+static struct monster_base *place_monster_base = NULL;
 
 /**
  * Predicate function for get_mon_num_prep)
@@ -1069,7 +1079,8 @@ static bool place_monster_base_okay(struct monster_race *race)
  * Helper function to place monsters that appear as friends or escorts
  */
  bool place_friends(struct chunk *c, int y, int x, struct monster_race *race, 
-		struct monster_race *friends_race, int total, bool sleep, byte origin)
+					struct monster_race *friends_race, int total, bool sleep,
+					byte origin)
  {
 	int level_difference, extra_chance, nx, ny;
 	int j;
@@ -1311,10 +1322,8 @@ void monster_death(struct monster *mon, bool stats)
 					rf_has(mon->race->flags, RF_UNIQUE));
 
 	/* Delete any mimicked objects */
-	if (mon->mimicked_obj) {
-		object_delete(mon->mimicked_obj);
-		mon->mimicked_obj = NULL;
-	}
+	if (mon->mimicked_obj)
+		object_delete(&mon->mimicked_obj);
 
 	/* Drop objects being carried */
 	while (obj) {
@@ -1381,7 +1390,7 @@ void monster_death(struct monster *mon, bool stats)
 bool mon_take_hit(struct monster *mon, int dam, bool *fear, const char *note)
 {
 	s32b div, new_exp, new_exp_frac;
-	monster_lore *l_ptr = get_lore(mon->race);
+	struct monster_lore *lore = get_lore(mon->race);
 
 
 	/* Redraw (later) if needed */
@@ -1481,13 +1490,13 @@ bool mon_take_hit(struct monster *mon, int dam, bool *fear, const char *note)
 		if (mflag_has(mon->mflag, MFLAG_VISIBLE) ||
 			rf_has(mon->race->flags, RF_UNIQUE)) {
 			/* Count kills this life */
-			if (l_ptr->pkills < MAX_SHORT) l_ptr->pkills++;
+			if (lore->pkills < MAX_SHORT) lore->pkills++;
 
 			/* Count kills in all lives */
-			if (l_ptr->tkills < MAX_SHORT) l_ptr->tkills++;
+			if (lore->tkills < MAX_SHORT) lore->tkills++;
 
 			/* Update lore and tracking */
-			lore_update(mon->race, l_ptr);
+			lore_update(mon->race, lore);
 			monster_race_track(player->upkeep, mon->race);
 		}
 
